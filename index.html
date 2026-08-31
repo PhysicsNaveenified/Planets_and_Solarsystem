@@ -1,23 +1,11 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Solar System Text AR</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <!-- Speed: open connections to the CDNs as early as possible, before
-         the browser even reaches the <script> tags below. This overlaps
-         DNS + TCP + TLS handshake time with the rest of page parsing. -->
-    <link rel="preconnect" href="https://aframe.io">
-    <link rel="dns-prefetch" href="https://aframe.io">
-    <link rel="preconnect" href="https://cdn.jsdelivr.net">
-    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <title>3D AR Solar System Walkthrough</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@6.1.1/dist/aframe-extras.min.js"></script>
-    
-    <!-- Fast OCR Engine -->
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
       html, body {
@@ -30,9 +18,8 @@
         font-family: Arial, sans-serif;
       }
 
-      /* Camera feed strictly behind WebGL scene */
       #camFeed {
-        position: absolute;
+        position: fixed;
         top: 0;
         left: 0;
         width: 100vw;
@@ -41,7 +28,6 @@
         z-index: 1;
       }
 
-      /* A-Frame canvas overlaid on top of video */
       .a-canvas {
         position: absolute !important;
         top: 0 !important;
@@ -52,335 +38,158 @@
         background: transparent !important;
       }
 
-      #hud {
+      #ui-panel {
         position: fixed;
         bottom: 25px;
         left: 50%;
         transform: translateX(-50%);
         background: rgba(0, 0, 0, 0.85);
         color: #fff;
-        padding: 12px 24px;
-        border-radius: 20px;
-        font-size: 15px;
+        padding: 10px 24px;
+        border-radius: 25px;
+        font-size: 14px;
         z-index: 100;
         text-align: center;
         box-shadow: 0 4px 15px rgba(0,0,0,0.6);
         pointer-events: none;
       }
-
-      #detected-word {
-        font-weight: bold;
-        color: #4CAF50;
-      }
-
-      #model-status {
-        color: #FFC107;
-        font-size: 13px;
-        margin-top: 4px;
-        display: block;
-      }
-
-      #ocrCanvas {
-        display: none;
-      }
     </style>
   </head>
   <body>
 
-    <!-- Camera Background -->
-    <video id="camFeed" autoplay playsinline muted></video>
+    <!-- Camera Feed Background -->
+    <video id="camFeed" autoplay playsinline webkit-playsinline muted></video>
 
-    <!-- Status HUD -->
-    <div id="hud">
-      Status: <span id="ocrStatus">Starting camera...</span><br>
-      Detected: <span id="detected-word">None</span>
-      <span id="model-status"></span>
+    <!-- Overlay Controls -->
+    <div id="ui-panel">
+      🪐 Walk around your room to view the solar system
     </div>
 
-    <canvas id="ocrCanvas"></canvas>
-
-    <!-- Transparent WebGL Scene -->
+    <!-- WebGL AR Scene -->
     <a-scene 
       embedded 
       vr-mode-ui="enabled: false"
       renderer="alpha: true; antialias: true; colorManagement: true;">
       
-      <!-- Camera -->
-      <a-camera id="arCamera" position="0 0 0" look-controls="enabled: false" fov="80"></a-camera>
+      <!-- User / Device Camera -->
+      <a-camera id="arCamera" position="0 1.2 0" look-controls="enabled: true"></a-camera>
 
-      <!-- Balanced Lighting -->
-      <a-light type="ambient" color="#ffffff" intensity="1.5"></a-light>
-      <a-light type="directional" color="#ffffff" intensity="2.0" position="2 4 3"></a-light>
+      <!-- Global Lighting -->
+      <a-light type="ambient" color="#ffffff" intensity="1.2"></a-light>
+      <a-light type="directional" color="#ffffff" intensity="1.8" position="2 5 2"></a-light>
 
-      <!-- Stationary 3D Anchor placed over detected text -->
-      <a-entity id="modelPivot" position="0 0 -2.5" rotation="0 0 0" visible="false">
-        <a-entity id="activeModel"></a-entity>
+      <!-- Root Container for the Entire Planetary System (Placed on floor in front of you) -->
+      <a-entity id="solarSystemRoot" position="0 0 -1.5">
+
+        <!-- SUN (Emissive Glow) -->
+        <a-entity id="body-sun" position="-2.2 0 0">
+          <a-sphere radius="0.32" material="color: #ff9900; emissive: #ff5500; emissiveIntensity: 0.8; roughness: 0.2;"></a-sphere>
+          <a-text value="SUN" align="center" position="0 0.45 0" scale="0.5 0.5 0.5" color="#fff"></a-text>
+        </a-entity>
+
+        <!-- MERCURY -->
+        <a-entity id="body-mercury" position="-1.5 0 0">
+          <a-sphere radius="0.07" material="color: #8c8c8c; roughness: 0.9; metalness: 0.1;"></a-sphere>
+          <a-text value="Mercury" align="center" position="0 0.22 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- VENUS -->
+        <a-entity id="body-venus" position="-1.1 0 0">
+          <a-sphere radius="0.11" material="color: #e3bb76; roughness: 0.7;"></a-sphere>
+          <a-text value="Venus" align="center" position="0 0.25 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- EARTH -->
+        <a-entity id="body-earth" position="-0.65 0 0">
+          <a-sphere radius="0.12" material="color: #2b82c9; roughness: 0.4; metalness: 0.1;"></a-sphere>
+          <a-text value="Earth" align="center" position="0 0.26 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- MARS -->
+        <a-entity id="body-mars" position="-0.25 0 0">
+          <a-sphere radius="0.09" material="color: #c1440e; roughness: 0.8;"></a-sphere>
+          <a-text value="Mars" align="center" position="0 0.24 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- JUPITER -->
+        <a-entity id="body-jupiter" position="0.3 0 0">
+          <a-sphere radius="0.25" material="color: #d8ca9d; roughness: 0.6;"></a-sphere>
+          <a-text value="Jupiter" align="center" position="0 0.38 0" scale="0.4 0.4 0.4" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- SATURN (With 3D Planetary Ring) -->
+        <a-entity id="body-saturn" position="1.0 0 0">
+          <a-sphere radius="0.20" material="color: #ead6b8; roughness: 0.5;"></a-sphere>
+          <a-ring radius-inner="0.26" radius-outer="0.42" rotation="75 20 0" material="color: #c9b48c; side: double; roughness: 0.4;"></a-ring>
+          <a-text value="Saturn" align="center" position="0 0.35 0" scale="0.4 0.4 0.4" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- URANUS (With Faint Ring) -->
+        <a-entity id="body-uranus" position="1.65 0 0">
+          <a-sphere radius="0.15" material="color: #4b70dd; roughness: 0.5;"></a-sphere>
+          <a-ring radius-inner="0.19" radius-outer="0.28" rotation="85 -30 0" material="color: #88aaff; side: double; opacity: 0.7; transparent: true;"></a-ring>
+          <a-text value="Uranus" align="center" position="0 0.3 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
+        </a-entity>
+
+        <!-- NEPTUNE -->
+        <a-entity id="body-neptune" position="2.2 0 0">
+          <a-sphere radius="0.14" material="color: #274687; roughness: 0.5;"></a-sphere>
+          <a-text value="Neptune" align="center" position="0 0.28 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
+        </a-entity>
+
       </a-entity>
+
     </a-scene>
 
     <script>
-      const MODEL_MAP = {
-        'SOLAR SYSTEM': './assets/solarsystem.glb',
-        'SOLARSYSTEM':  './assets/solarsystem.glb',
-        'SUN':          './assets/sun.glb',
-        'MOON':         './assets/moon.glb',
-        'MERCURY':      './assets/mercury.glb',
-        'VENUS':        './assets/venus.glb',
-        'EARTH':        './assets/earth.glb',
-        'MARS':         './assets/mars.glb',
-        'JUPITER':      './assets/jupiter.glb',
-        'SATURN':       './assets/saturn.glb',
-        'URANUS':       './assets/uranus.glb',
-        'NEPTUNE':      './assets/neptune.glb',
-        'PLUTO':        './assets/pluto.glb'
-      };
-
-      // Speed: restrict OCR to only the characters that can ever appear in
-      // a MODEL_MAP key. A smaller character set means Tesseract's LSTM
-      // recognizer has far fewer candidates to score per glyph, which
-      // measurably speeds up each recognize() call.
-      const OCR_WHITELIST = Array.from(
-        new Set(Object.keys(MODEL_MAP).join('').replace(/[^A-Z0-9]/g, '').split(''))
-      ).join('');
-
       const video = document.getElementById('camFeed');
-      const statusEl = document.getElementById('ocrStatus');
-      const detectedEl = document.getElementById('detected-word');
-      const modelStatusEl = document.getElementById('model-status');
-      const activeModel = document.getElementById('activeModel');
-      const modelPivot = document.getElementById('modelPivot');
-      const canvas = document.getElementById('ocrCanvas');
-      const ctx = canvas.getContext('2d');
 
-      let currentActiveKey = null;
-      let isProcessing = false;
-      let ocrWorker = null;
-      let target3DSize = 0.5;
-      let scanningStarted = false;
-
-      // Speed: camera startup and OCR-engine startup don't depend on each
-      // other, so kick both off at the same time instead of waiting for
-      // the camera to fully resolve before even starting to load
-      // Tesseract. Whichever finishes last is now the only bottleneck,
-      // instead of the sum of both.
-      let cameraReady = false;
-      let ocrReady = false;
-      let cameraFailed = false; // once true, camera status is final — never overwrite it
-
-      function maybeStartScanning() {
-        if (cameraFailed) return; // preserve the real error message, don't clobber it
-
-        if (cameraReady && ocrReady && !scanningStarted) {
-          scanningStarted = true;
-          statusEl.textContent = 'Ready — Point camera at text';
-          startTextScanLoop();
-        } else if (!cameraReady && ocrReady) {
-          statusEl.textContent = 'Waiting for camera permission...';
-        } else if (cameraReady && !ocrReady) {
-          statusEl.textContent = 'Loading OCR engine...';
-        }
-      }
-
-      // 1. Start Device Camera
+      // 1. Instant Camera Setup
       async function startCamera() {
         try {
-          if (!window.isSecureContext) {
-            throw new Error(
-              'Camera requires HTTPS or localhost. This page was opened over an insecure origin (' +
-              location.protocol + ').'
-            );
-          }
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            throw new Error('getUserMedia is not available in this browser/context.');
-          }
-
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false
           });
           video.srcObject = stream;
           await video.play();
-          cameraReady = true;
-          maybeStartScanning();
         } catch (err) {
-          cameraFailed = true;
-          // Surface the real reason instead of a generic message, so a
-          // stuck state is actually diagnosable.
-          let reason = err && err.message ? err.message : 'Unknown error';
-          if (err && err.name === 'NotAllowedError') {
-            reason = 'Permission denied. Allow camera access for this site and reload.';
-          } else if (err && err.name === 'NotFoundError') {
-            reason = 'No camera device found.';
-          } else if (err && err.name === 'NotReadableError') {
-            reason = 'Camera is already in use by another app.';
-          }
-          statusEl.textContent = 'Camera error: ' + reason;
-          console.error(err);
+          console.error('Camera error:', err);
         }
       }
 
-      // 2. Initialize Tesseract (runs in parallel with startCamera, not after it)
-      async function initOCR() {
-        try {
-          ocrWorker = await Tesseract.createWorker('eng');
+      // 2. Individual On-Axis Rotation for Each Planet
+      function animatePlanets() {
+        const planets = [
+          { id: 'body-sun', speed: 0.2 },
+          { id: 'body-mercury', speed: 0.6 },
+          { id: 'body-venus', speed: -0.4 },
+          { id: 'body-earth', speed: 1.0 },
+          { id: 'body-mars', speed: 0.9 },
+          { id: 'body-jupiter', speed: 1.8 },
+          { id: 'body-saturn', speed: 1.5 },
+          { id: 'body-uranus', speed: 1.2 },
+          { id: 'body-neptune', speed: 1.1 }
+        ];
 
-          // Speed: SPARSE_TEXT skips full-page layout/orientation analysis
-          // and just hunts for text blobs, which is what we want for a
-          // single label on a page. Combined with the whitelist, each
-          // recognize() call is noticeably faster than the defaults.
-          await ocrWorker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
-            tessedit_char_whitelist: OCR_WHITELIST
-          });
-
-          ocrReady = true;
-          maybeStartScanning();
-        } catch (err) {
-          statusEl.textContent = 'OCR initialization failed.';
-          console.error(err);
-        }
-      }
-
-      // 3. Center model and scale to detected text size (No rotation / revolution)
-      activeModel.addEventListener('model-loaded', () => {
-        const obj = activeModel.getObject3D('mesh');
-        if (!obj) return;
-
-        // Strip embedded animation tracks to kill orbital translations
-        if (obj.animations) {
-          obj.animations.length = 0;
-        }
-
-        // Lock rotations and positions to zero
-        obj.position.set(0, 0, 0);
-        obj.rotation.set(0, 0, 0);
-        obj.scale.set(1, 1, 1);
-        obj.updateMatrixWorld(true);
-
-        // Calculate actual bounding box
-        const box = new THREE.Box3().setFromObject(obj);
-        const size = new THREE.Vector3();
-        const center = new THREE.Vector3();
-        box.getSize(size);
-        box.getCenter(center);
-
-        // Shift inner geometry so geometric center is exact (0, 0, 0)
-        obj.position.sub(center);
-
-        // Scale proportionally to fit the text boundaries
-        const maxDimension = Math.max(size.x, size.y, size.z);
-        if (maxDimension > 0) {
-          const desiredScale = target3DSize / maxDimension;
-          activeModel.setAttribute('scale', `${desiredScale} ${desiredScale} ${desiredScale}`);
-        }
-
-        modelPivot.setAttribute('visible', 'true');
-        modelStatusEl.textContent = '';
-      });
-
-      activeModel.addEventListener('model-error', (err) => {
-        modelStatusEl.textContent = 'Failed to load model file (404/CORS)';
-        console.error('GLTF Load Error:', err);
-      });
-
-      // 4. Text Recognition Loop with text-boundary matching
-      //    Speed: self-scheduling loop instead of a fixed 1000ms
-      //    setInterval. As soon as one recognize() call finishes, the
-      //    next one is queued almost immediately, so detection happens
-      //    as fast as the device can actually process frames instead of
-      //    always waiting out a full second regardless of how fast the
-      //    previous scan was.
-      const MIN_SCAN_GAP_MS = 80;
-
-      function scheduleNextScan() {
-        setTimeout(runScan, MIN_SCAN_GAP_MS);
-      }
-
-      async function runScan() {
-        if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) {
-          scheduleNextScan();
-          return;
-        }
-
-        isProcessing = true;
-
-        const scale = 480 / video.videoWidth;
-        canvas.width = 480;
-        canvas.height = video.videoHeight * scale;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        try {
-          const { data } = await ocrWorker.recognize(canvas);
-
-          if (data && data.words) {
-            for (const wordObj of data.words) {
-              const cleanWord = wordObj.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-              for (const key of Object.keys(MODEL_MAP)) {
-                const cleanKey = key.replace(/\s+/g, '');
-                if (cleanWord === cleanKey || cleanWord.includes(cleanKey)) {
-                  
-                  // Compute text bounding dimensions
-                  const bbox = wordObj.bbox;
-                  const textCenterX = (bbox.x0 + bbox.x1) / 2;
-                  const textCenterY = (bbox.y0 + bbox.y1) / 2;
-                  const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
-
-                  // Perspective transformation to Z = -2.0 meters
-                  const planeZ = -2.0;
-                  const fovRad = (80 * Math.PI) / 180;
-                  const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
-                  const planeHalfW = planeHalfH * (window.innerWidth / window.innerHeight);
-
-                  const posX = ((textCenterX / canvas.width) * 2 - 1) * planeHalfW;
-                  const posY = -((textCenterY / canvas.height) * 2 - 1) * planeHalfH;
-
-                  // Size model directly to the detected word width
-                  target3DSize = Math.max((textPixelWidth / canvas.width) * (planeHalfW * 2), 0.25);
-
-                  modelPivot.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
-
-                  // Apply updated scale to the existing model if already loaded
-                  const obj = activeModel.getObject3D('mesh');
-                  if (obj) {
-                    const box = new THREE.Box3().setFromObject(obj);
-                    const size = new THREE.Vector3();
-                    box.getSize(size);
-                    const maxDim = Math.max(size.x, size.y, size.z);
-                    if (maxDim > 0) {
-                      const s = target3DSize / maxDim;
-                      activeModel.setAttribute('scale', `${s} ${s} ${s}`);
-                    }
-                  }
-
-                  if (currentActiveKey !== key) {
-                    currentActiveKey = key;
-                    detectedEl.textContent = key;
-                    modelStatusEl.textContent = `Loading ${key}...`;
-                    
-                    activeModel.setAttribute('gltf-model', MODEL_MAP[key]);
-                  }
-
-                  modelPivot.setAttribute('visible', 'true');
-                  break;
-                }
-              }
+        let rot = 0;
+        function loop() {
+          rot += 0.5;
+          planets.forEach(p => {
+            const el = document.getElementById(p.id);
+            if (el) {
+              const currentAngle = (rot * p.speed) % 360;
+              el.querySelector('a-sphere').setAttribute('rotation', `0 ${currentAngle} 0`);
             }
-          }
-        } catch (err) {
-          console.error('OCR Error:', err);
-        } finally {
-          isProcessing = false;
-          scheduleNextScan();
+          });
+          requestAnimationFrame(loop);
         }
-      }
-
-      function startTextScanLoop() {
-        runScan();
+        loop();
       }
 
       window.addEventListener('DOMContentLoaded', () => {
         startCamera();
-        initOCR();
+        animatePlanets();
       });
     </script>
   </body>
