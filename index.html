@@ -2,7 +2,7 @@
 <html>
   <head>
     <title>Text-Anchored AR</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
@@ -20,9 +20,8 @@
         font-family: Arial, sans-serif;
       }
 
-      /* Camera feed strictly behind WebGL */
       #camFeed {
-        position: fixed;
+        position: absolute;
         top: 0;
         left: 0;
         width: 100vw;
@@ -31,7 +30,6 @@
         z-index: 1;
       }
 
-      /* A-Frame WebGL canvas overlaid with transparency */
       .a-canvas {
         position: absolute !important;
         top: 0 !important;
@@ -70,10 +68,8 @@
   </head>
   <body>
 
-    <!-- Camera Feed -->
-    <video id="camFeed" autoplay playsinline webkit-playsinline muted></video>
+    <video id="camFeed" autoplay playsinline muted></video>
 
-    <!-- Status HUD -->
     <div id="hud">
       Status: <span id="ocrStatus">Starting camera...</span><br>
       Detected: <span id="detected-word">None</span>
@@ -81,7 +77,6 @@
 
     <canvas id="ocrCanvas"></canvas>
 
-    <!-- Transparent WebGL Scene -->
     <a-scene 
       embedded 
       vr-mode-ui="enabled: false"
@@ -92,7 +87,7 @@
       <a-light type="ambient" color="#ffffff" intensity="1.5"></a-light>
       <a-light type="directional" color="#ffffff" intensity="2.0" position="2 4 3"></a-light>
 
-      <!-- Fixed stationary entity positioned directly at the 3D center of detected text -->
+      <!-- Positioned directly at the 3D center of the detected text -->
       <a-entity id="textTracker" position="0 0 -2" visible="false">
         <a-entity id="activeModel"></a-entity>
       </a-entity>
@@ -130,40 +125,19 @@
       let target3DSize = 0.5;
       const HIDE_TIMEOUT_MS = 1400;
 
-      // Robust camera initialization with fallback
       async function startCamera() {
-        const constraintsList = [
-          { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false },
-          { video: { facingMode: 'environment' }, audio: false },
-          { video: true, audio: false }
-        ];
-
-        let stream = null;
-        for (const constraints of constraintsList) {
-          try {
-            stream = await navigator.mediaDevices.getUserMedia(constraints);
-            if (stream) break;
-          } catch (e) {
-            console.warn('Constraint failed, trying fallback...', e);
-          }
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+          });
+          video.srcObject = stream;
+          await video.play();
+          statusEl.textContent = 'Loading OCR Engine...';
+          initOCR();
+        } catch (err) {
+          statusEl.textContent = 'Camera permission denied.';
+          console.error(err);
         }
-
-        if (!stream) {
-          statusEl.textContent = 'Camera blocked or unavailable.';
-          return;
-        }
-
-        video.srcObject = stream;
-        video.onloadedmetadata = async () => {
-          try {
-            await video.play();
-            statusEl.textContent = 'Loading OCR Engine...';
-            initOCR();
-          } catch (err) {
-            statusEl.textContent = 'Click anywhere to enable camera';
-            window.addEventListener('click', () => video.play(), { once: true });
-          }
-        };
       }
 
       async function initOCR() {
@@ -178,11 +152,12 @@
         }
       }
 
-      // Hard-centers model vertices and locks orientation
+      // Hard-centers geometry, clears all animation clips, and locks rotation to 0
       activeModel.addEventListener('model-loaded', () => {
         const threeGroup = activeModel.getObject3D('mesh');
         if (!threeGroup) return;
 
+        // Clear embedded translation/rotation animations from the GLB
         if (threeGroup.animations) {
           threeGroup.animations.length = 0;
         }
@@ -212,6 +187,7 @@
         }
       });
 
+      // Visibility watchdog loop (auto-hides when text leaves frame)
       function startVisibilityLoop() {
         function checkLoop() {
           if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
@@ -226,12 +202,12 @@
 
       async function startTextScanLoop() {
         setInterval(async () => {
-          if (isProcessing || !ocrWorker || video.readyState < 2) return;
+          if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
           isProcessing = true;
 
           const scanW = 480;
-          const scanH = Math.round(video.videoHeight * (scanW / video.videoWidth)) || 360;
+          const scanH = Math.round(video.videoHeight * (scanW / video.videoWidth));
           canvas.width = scanW;
           canvas.height = scanH;
           ctx.drawImage(video, 0, 0, scanW, scanH);
@@ -255,9 +231,11 @@
                     const textCenterY = (bbox.y0 + bbox.y1) / 2;
                     const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
 
+                    // Map 2D pixel coordinates to normalized device coordinates (-1 to 1)
                     const ndcX = (textCenterX / scanW) * 2 - 1;
                     const ndcY = -((textCenterY / scanH) * 2 - 1);
 
+                    // Perspective projection at plane Z = -2.0 meters
                     const planeZ = -2.0;
                     const fovRad = (80 * Math.PI) / 180;
                     const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
@@ -266,6 +244,7 @@
                     const posX = ndcX * planeHalfW;
                     const posY = ndcY * planeHalfH;
 
+                    // Match model size directly to the text width
                     const text3DWidth = (textPixelWidth / scanW) * (planeHalfW * 2);
                     target3DSize = Math.max(text3DWidth, 0.25);
 
