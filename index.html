@@ -6,9 +6,7 @@
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@6.1.1/dist/aframe-extras.min.js"></script>
-    
-    <!-- Fast OCR Engine -->
+    <!-- OCR Engine -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
@@ -70,10 +68,8 @@
   </head>
   <body>
 
-    <!-- Camera Feed -->
     <video id="camFeed" autoplay playsinline muted></video>
 
-    <!-- Status HUD -->
     <div id="hud">
       Status: <span id="ocrStatus">Starting camera...</span><br>
       Detected: <span id="detected-word">None</span>
@@ -81,7 +77,6 @@
 
     <canvas id="ocrCanvas"></canvas>
 
-    <!-- Transparent WebGL AR Scene -->
     <a-scene 
       embedded 
       vr-mode-ui="enabled: false"
@@ -92,9 +87,8 @@
       <a-light type="ambient" color="#ffffff" intensity="1.4"></a-light>
       <a-light type="directional" color="#ffffff" intensity="1.8" position="2 4 3"></a-light>
 
-      <!-- Anchored in front of camera plane; dynamic position follows text center -->
+      <!-- Anchored directly over detected text -->
       <a-entity id="textTracker" position="0 0 -2" visible="false">
-        <!-- Spinner rotating strictly around the perpendicular Z-axis -->
         <a-entity id="spinner">
           <a-entity id="activeModel"></a-entity>
         </a-entity>
@@ -131,9 +125,8 @@
       let isProcessing = false;
       let ocrWorker = null;
       let lastSeenTime = 0;
-      const HIDE_TIMEOUT_MS = 1400; // Hides model 1.4s after text is lost/removed
+      const HIDE_TIMEOUT_MS = 1400;
 
-      // 1. Start Camera
       async function startCamera() {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
@@ -149,7 +142,6 @@
         }
       }
 
-      // 2. Initialize Tesseract
       async function initOCR() {
         try {
           ocrWorker = await Tesseract.createWorker('eng');
@@ -162,39 +154,45 @@
         }
       }
 
-      // 3. Center and normalize the model geometry
+      // Hard-centers every sub-mesh and strips orbital animation tracks
       activeModel.addEventListener('model-loaded', () => {
-        const obj = activeModel.getObject3D('mesh');
-        if (!obj) return;
+        const root = activeModel.getObject3D('mesh');
+        if (!root) return;
 
-        obj.position.set(0, 0, 0);
-        obj.rotation.set(0, 0, 0);
+        // Strip embedded animations that cause orbital translations
+        if (root.animations && root.animations.length > 0) {
+          root.animations.forEach((clip) => {
+            // Remove position tracks; keep only local rotations if any
+            clip.tracks = clip.tracks.filter(t => !t.name.endsWith('.position'));
+          });
+        }
 
-        const box = new THREE.Box3().setFromObject(obj);
+        // Calculate full group bounding box across all children
+        const box = new THREE.Box3().setFromObject(root);
         const center = new THREE.Vector3();
         const size = new THREE.Vector3();
         box.getCenter(center);
         box.getSize(size);
 
-        // Shift inner geometry so geometric center is exact (0, 0, 0)
-        obj.position.sub(center);
+        // Lock all children positions directly to center (0,0,0)
+        root.position.x = -center.x;
+        root.position.y = -center.y;
+        root.position.z = -center.z;
 
         const maxDim = Math.max(size.x, size.y, size.z);
         if (maxDim > 0) {
-          const desiredScale = 0.9 / maxDim;
+          const desiredScale = 0.85 / maxDim;
           activeModel.setAttribute('scale', `${desiredScale} ${desiredScale} ${desiredScale}`);
         }
       });
 
-      // 4. Spin strictly around the axis perpendicular to the text plane (Z-axis)
+      // Pure on-axis rotation perpendicular to the screen (around Z-axis)
       function startPerpendicularSpin() {
         let currentRot = 0;
         function renderLoop() {
           currentRot = (currentRot + 0.6) % 360;
-          // Perpendicular to view/camera plane is the Z-axis rotation
           spinner.setAttribute('rotation', `0 0 ${currentRot}`);
 
-          // Visibility check: auto-hide if text is no longer in view
           if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
             textTracker.setAttribute('visible', 'false');
             detectedEl.textContent = 'None';
@@ -206,7 +204,6 @@
         renderLoop();
       }
 
-      // 5. OCR & Real-time Bounding Box Text Tracking
       async function startTextScanLoop() {
         setInterval(async () => {
           if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
@@ -233,16 +230,15 @@
                     matchFound = true;
                     lastSeenTime = Date.now();
 
-                    // Calculate center of the detected text bounding box
+                    // Calculate text bounding box center
                     const bbox = wordObj.bbox;
                     const textCenterX = (bbox.x0 + bbox.x1) / 2;
                     const textCenterY = (bbox.y0 + bbox.y1) / 2;
 
-                    // Convert pixel coordinates (0 to scanW/scanH) to normalized device coordinates (-1 to 1)
+                    // Map to 3D view plane coordinates
                     const ndcX = (textCenterX / scanW) * 2 - 1;
                     const ndcY = -((textCenterY / scanH) * 2 - 1);
 
-                    // Project text position onto the 3D plane at z = -2.0 meters
                     const planeZ = -2.0;
                     const fovRad = (80 * Math.PI) / 180;
                     const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
@@ -253,7 +249,6 @@
 
                     textTracker.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
 
-                    // Swap model if new word
                     if (currentActiveKey !== key) {
                       currentActiveKey = key;
                       detectedEl.textContent = key;
