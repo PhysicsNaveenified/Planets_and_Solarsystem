@@ -12,21 +12,36 @@
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
-      body {
+      html, body {
         margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
         overflow: hidden;
+        background-color: #000;
         font-family: Arial, sans-serif;
       }
 
-      /* Native camera feed behind WebGL */
+      /* Camera feed strictly behind WebGL scene */
       #camFeed {
-        position: fixed;
+        position: absolute;
         top: 0;
         left: 0;
         width: 100vw;
         height: 100vh;
         object-fit: cover;
-        z-index: -1;
+        z-index: 1;
+      }
+
+      /* A-Frame canvas overlaid on top of video */
+      .a-canvas {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        z-index: 2 !important;
+        background: transparent !important;
       }
 
       #hud {
@@ -39,9 +54,10 @@
         padding: 12px 24px;
         border-radius: 20px;
         font-size: 15px;
-        z-index: 1000;
+        z-index: 100;
         text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+        pointer-events: none;
       }
 
       #detected-word {
@@ -52,6 +68,8 @@
       #model-status {
         color: #FFC107;
         font-size: 13px;
+        margin-top: 4px;
+        display: block;
       }
 
       #ocrCanvas {
@@ -61,38 +79,38 @@
   </head>
   <body>
 
-    <!-- Native Camera Background -->
+    <!-- Camera Background -->
     <video id="camFeed" autoplay playsinline muted></video>
 
+    <!-- Status HUD -->
     <div id="hud">
       Status: <span id="ocrStatus">Starting camera...</span><br>
-      Detected: <span id="detected-word">None</span><br>
+      Detected: <span id="detected-word">None</span>
       <span id="model-status"></span>
     </div>
 
     <canvas id="ocrCanvas"></canvas>
 
-    <!-- Lightweight transparent A-Frame scene -->
-    <a-scene embedded vr-mode-ui="enabled: false">
+    <!-- Transparent WebGL Scene -->
+    <a-scene 
+      embedded 
+      vr-mode-ui="enabled: false"
+      renderer="alpha: true; antialias: true; colorManagement: true;">
+      
+      <!-- Camera -->
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
-      <a-light type="ambient" color="#ffffff" intensity="1.2"></a-light>
-      <a-light type="directional" color="#ffffff" intensity="1.5" position="1 2 1"></a-light>
+      <!-- Balanced Lighting -->
+      <a-light type="ambient" color="#ffffff" intensity="1.5"></a-light>
+      <a-light type="directional" color="#ffffff" intensity="2.0" position="2 4 3"></a-light>
 
-      <!-- 3D Model anchored directly in front of the camera view -->
-      <a-entity id="modelContainer" position="0 0 -2.5">
-        <a-entity
-          id="activeModel"
-          position="0 0 0"
-          rotation="0 0 0"
-          visible="false"
-          animation-mixer="clip: *; loop: repeat">
-        </a-entity>
+      <!-- 3D Anchor in front of user -->
+      <a-entity id="modelPivot" position="0 0 -2.5" rotation="0 0 0">
+        <a-entity id="activeModel" visible="false"></a-entity>
       </a-entity>
     </a-scene>
 
     <script>
-      // File paths mapped directly (loads on demand, saving bandwidth)
       const MODEL_MAP = {
         'SOLAR SYSTEM': './assets/solarsystem.glb',
         'SOLARSYSTEM':  './assets/solarsystem.glb',
@@ -114,6 +132,7 @@
       const detectedEl = document.getElementById('detected-word');
       const modelStatusEl = document.getElementById('model-status');
       const activeModel = document.getElementById('activeModel');
+      const modelPivot = document.getElementById('modelPivot');
       const canvas = document.getElementById('ocrCanvas');
       const ctx = canvas.getContext('2d');
 
@@ -121,14 +140,14 @@
       let isProcessing = false;
       let ocrWorker = null;
 
-      // 1. Start user camera
+      // 1. Start Device Camera
       async function startCamera() {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
           });
           video.srcObject = stream;
-          video.play();
+          await video.play();
           statusEl.textContent = 'Loading OCR Engine...';
           initOCR();
         } catch (err) {
@@ -143,45 +162,65 @@
           ocrWorker = await Tesseract.createWorker('eng');
           statusEl.textContent = 'Ready — Point camera at text';
           startTextScanLoop();
+          startSlowSpinAnimation();
         } catch (err) {
-          statusEl.textContent = 'OCR failed to load.';
+          statusEl.textContent = 'OCR initialization failed.';
           console.error(err);
         }
       }
 
-      // 3. Auto-fit model dimensions dynamically
-      function handleModelLoaded() {
-        const mesh = activeModel.getObject3D('mesh');
-        if (!mesh) return;
+      // 3. Normalize, center, and display the 3D model
+      activeModel.addEventListener('model-loaded', () => {
+        const obj = activeModel.getObject3D('mesh');
+        if (!obj) return;
 
-        const box = new THREE.Box3().setFromObject(mesh);
+        // Calculate actual bounding box
+        const box = new THREE.Box3().setFromObject(obj);
         const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
         box.getSize(size);
+        box.getCenter(center);
 
-        const maxDim = Math.max(size.x, size.y, size.z);
-        if (maxDim > 0) {
-          const targetSize = 1.2; // Display size in meters
-          const factor = targetSize / maxDim;
-          activeModel.setAttribute('scale', `${factor} ${factor} ${factor}`);
+        // Center pivot offset so model appears directly in view
+        obj.position.x = -center.x;
+        obj.position.y = -center.y;
+        obj.position.z = -center.z;
+
+        // Auto-scale to fit roughly 1.0 meter in view
+        const maxDimension = Math.max(size.x, size.y, size.z);
+        if (maxDimension > 0) {
+          const desiredScale = 1.0 / maxDimension;
+          activeModel.setAttribute('scale', `${desiredScale} ${desiredScale} ${desiredScale}`);
         }
+
         activeModel.setAttribute('visible', 'true');
         modelStatusEl.textContent = '';
-      }
-
-      activeModel.addEventListener('model-loaded', handleModelLoaded);
-      activeModel.addEventListener('model-error', (e) => {
-        modelStatusEl.textContent = 'Error loading .glb file. Check file path.';
-        console.error('Model load error:', e);
       });
 
-      // 4. Continual text detection loop
+      activeModel.addEventListener('model-error', (err) => {
+        modelStatusEl.textContent = 'Failed to load model file (404/CORS)';
+        console.error('GLTF Load Error:', err);
+      });
+
+      // 4. Subtle continuous rotation
+      function startSlowSpinAnimation() {
+        let rotY = 0;
+        function animate() {
+          rotY = (rotY + 0.5) % 360;
+          modelPivot.setAttribute('rotation', `0 ${rotY} 0`);
+          requestAnimationFrame(animate);
+        }
+        animate();
+      }
+
+      // 5. Text Recognition Loop
       async function startTextScanLoop() {
         setInterval(async () => {
           if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
           isProcessing = true;
 
-          // Downsample to 480px width for fast real-time OCR
+          // Downsample frame to 480px width for low latency
           const scale = 480 / video.videoWidth;
           canvas.width = 480;
           canvas.height = video.videoHeight * scale;
@@ -189,23 +228,24 @@
 
           try {
             const { data: { text } } = await ocrWorker.recognize(canvas);
-            const sanitizedText = text.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ');
+            const cleanText = text.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ');
 
             for (const key of Object.keys(MODEL_MAP)) {
-              if (sanitizedText.includes(key)) {
+              if (cleanText.includes(key)) {
                 if (currentActiveKey !== key) {
                   currentActiveKey = key;
                   detectedEl.textContent = key;
                   modelStatusEl.textContent = `Loading ${key}...`;
                   
-                  // Load the specific .glb dynamically
+                  // Set new model source
+                  activeModel.setAttribute('visible', 'false');
                   activeModel.setAttribute('gltf-model', MODEL_MAP[key]);
                 }
                 break;
               }
             }
           } catch (err) {
-            console.error('Scan Error:', err);
+            console.error('OCR Error:', err);
           } finally {
             isProcessing = false;
           }
