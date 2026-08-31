@@ -145,14 +145,14 @@
           ocrWorker = await Tesseract.createWorker('eng');
           statusEl.textContent = 'Ready — Point camera at text';
           startTextScanLoop();
-          startVisibilityWatchdog();
+          startTrueSpinLoop();
         } catch (err) {
           statusEl.textContent = 'OCR initialization failed.';
           console.error(err);
         }
       }
 
-      // Hard-centers geometry inside a Three.js Group
+      // Hard-centers geometry inside a Three.js Group so rotation is 100% on-axis
       activeModel.addEventListener('model-loaded', () => {
         const threeGroup = activeModel.getObject3D('mesh');
         if (!threeGroup) return;
@@ -191,17 +191,28 @@
         }
       });
 
-      // Keeps track of text visibility and hides model when text disappears
-      function startVisibilityWatchdog() {
-        function check() {
+      // Pure on-axis rotation (perpendicular to camera/text plane around Z-axis)
+      function startTrueSpinLoop() {
+        let angle = 0;
+        function render() {
+          angle = (angle + 0.015) % (Math.PI * 2);
+
+          const threeGroup = activeModel.getObject3D('mesh');
+          if (threeGroup) {
+            // Directly rotate the Three.js mesh along the perpendicular Z-axis
+            threeGroup.rotation.z = angle;
+          }
+
+          // Auto-hide when text disappears from frame
           if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
             textTracker.setAttribute('visible', 'false');
             detectedEl.textContent = 'None';
             currentActiveKey = null;
           }
-          requestAnimationFrame(check);
+
+          requestAnimationFrame(render);
         }
-        check();
+        render();
       }
 
       async function startTextScanLoop() {
