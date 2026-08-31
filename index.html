@@ -6,7 +6,7 @@
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <!-- Fast WebAssembly OCR -->
+    <!-- OCR Engine -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
@@ -20,7 +20,7 @@
         font-family: Arial, sans-serif;
       }
 
-      /* Native camera stream strictly behind WebGL scene */
+      /* Native camera stream strictly behind WebGL */
       #camFeed {
         position: fixed;
         top: 0;
@@ -82,7 +82,7 @@
 
     <!-- Status HUD -->
     <div id="hud">
-      Status: <span id="ocrStatus">Starting camera...</span><br>
+      Status: <span id="ocrStatus">Opening camera...</span><br>
       Detected: <span id="detected-word">None</span>
       <span id="model-status"></span>
     </div>
@@ -93,7 +93,7 @@
     <a-scene 
       embedded 
       vr-mode-ui="enabled: false"
-      renderer="alpha: true; antialias: false; powerPreference: high-performance; precision: mediump; colorManagement: true;">
+      renderer="alpha: true; antialias: false; powerPreference: high-performance; precision: lowp; colorManagement: true;">
       
       <a-camera id="arCamera" position="0 0 0" look-controls="enabled: false" fov="80"></a-camera>
 
@@ -139,43 +139,34 @@
       let target3DSize = 0.5;
       const HIDE_TIMEOUT_MS = 1400;
 
-      // 1. High-speed camera initialization with instant fallbacks
+      // 1. Instant Camera Opening (Zero Loops, Direct Hardware Access)
       async function startCamera() {
-        const constraintsList = [
-          { video: { facingMode: { ideal: 'environment' }, width: { ideal: 960 }, height: { ideal: 540 } }, audio: false },
-          { video: { facingMode: 'environment' }, audio: false },
-          { video: true, audio: false }
-        ];
-
-        let stream = null;
-        for (const constraints of constraintsList) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false
+          });
+          video.srcObject = stream;
+          await video.play();
+          
+          // Camera is already rendering; now download OCR in the background
+          statusEl.textContent = 'Preparing text scanner...';
+          setTimeout(initOCR, 50);
+        } catch (err) {
+          // Absolute minimal fallback if back-camera query fails
           try {
-            stream = await navigator.mediaDevices.getUserMedia(constraints);
-            if (stream) break;
-          } catch (e) {
-            console.warn('Constraint fallback step...', e);
-          }
-        }
-
-        if (!stream) {
-          statusEl.textContent = 'Camera blocked or unavailable.';
-          return;
-        }
-
-        video.srcObject = stream;
-        video.onloadedmetadata = async () => {
-          try {
+            const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            video.srcObject = fallbackStream;
             await video.play();
-            statusEl.textContent = 'Loading OCR Engine...';
-            initOCR();
-          } catch (err) {
-            statusEl.textContent = 'Tap screen to enable camera';
-            window.addEventListener('click', () => video.play(), { once: true });
+            statusEl.textContent = 'Preparing text scanner...';
+            setTimeout(initOCR, 50);
+          } catch (e) {
+            statusEl.textContent = 'Camera blocked. Please allow permissions.';
           }
-        };
+        }
       }
 
-      // 2. Optimized OCR initialization with character whitelist & SIMD acceleration
+      // 2. Background Asynchronous OCR Initialization
       async function initOCR() {
         try {
           ocrWorker = await Tesseract.createWorker('eng', 1, {
@@ -192,35 +183,32 @@
           startTextScanLoop();
           startVisibilityWatchdog();
         } catch (err) {
-          statusEl.textContent = 'OCR initialization failed.';
+          statusEl.textContent = 'Scanner engine error.';
           console.error(err);
         }
       }
 
-      // 3. Normalize, center, clear animation tracks, and size model to text boundary
+      // 3. Normalize, center, clear animations, and match text dimensions
       activeModel.addEventListener('model-loaded', () => {
         const threeGroup = activeModel.getObject3D('mesh');
         if (!threeGroup) return;
 
-        // Clear embedded animation tracks so models never move or revolve
+        // Clear embedded animation tracks to keep model completely static
         if (threeGroup.animations) {
           threeGroup.animations.length = 0;
         }
 
-        // Lock rotations and position to static zero
         threeGroup.position.set(0, 0, 0);
         threeGroup.rotation.set(0, 0, 0);
         threeGroup.scale.set(1, 1, 1);
         threeGroup.updateMatrixWorld(true);
 
-        // Compute true bounding box across all children
         const bbox = new THREE.Box3().setFromObject(threeGroup);
         const center = new THREE.Vector3();
         const size = new THREE.Vector3();
         bbox.getCenter(center);
         bbox.getSize(size);
 
-        // Offset vertices so center of mass sits exactly at (0, 0, 0)
         threeGroup.traverse((child) => {
           if (child.isMesh) {
             child.geometry.computeBoundingBox();
@@ -228,7 +216,6 @@
           }
         });
 
-        // Set scale strictly matching text boundary width
         const maxMeshDim = Math.max(size.x, size.y, size.z);
         if (maxMeshDim > 0) {
           const baseScale = target3DSize / maxMeshDim;
@@ -244,7 +231,7 @@
         console.error('GLTF Load Error:', err);
       });
 
-      // 4. Auto-hide watchdog when text leaves camera frame
+      // 4. Auto-hide watchdog when text leaves frame
       function startVisibilityWatchdog() {
         function check() {
           if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
@@ -257,14 +244,13 @@
         check();
       }
 
-      // 5. Fast downsampled OCR recognition and projection
+      // 5. Detection loop
       async function startTextScanLoop() {
         setInterval(async () => {
           if (isProcessing || !ocrWorker || video.readyState < 2) return;
 
           isProcessing = true;
 
-          // Downsample frame to 320px width for fast recognition without dropping accuracy
           const scanW = 320;
           const scanH = Math.round(video.videoHeight * (scanW / video.videoWidth)) || 240;
           canvas.width = scanW;
@@ -285,17 +271,14 @@
                     matchFound = true;
                     lastSeenTime = Date.now();
 
-                    // Calculate text bounding box center and width
                     const bbox = wordObj.bbox;
                     const textCenterX = (bbox.x0 + bbox.x1) / 2;
                     const textCenterY = (bbox.y0 + bbox.y1) / 2;
                     const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
 
-                    // Map 2D pixel coordinates to NDC coordinates (-1 to 1)
                     const ndcX = (textCenterX / scanW) * 2 - 1;
                     const ndcY = -((textCenterY / scanH) * 2 - 1);
 
-                    // Perspective projection at Z = -2.0 meters
                     const planeZ = -2.0;
                     const fovRad = (80 * Math.PI) / 180;
                     const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
@@ -304,13 +287,11 @@
                     const posX = ndcX * planeHalfW;
                     const posY = ndcY * planeHalfH;
 
-                    // Match model size strictly to text bounding box dimensions
                     const text3DWidth = (textPixelWidth / scanW) * (planeHalfW * 2);
                     target3DSize = Math.max(text3DWidth, 0.25);
 
                     textTracker.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
 
-                    // Apply updated scale directly to active 3D mesh
                     const threeGroup = activeModel.getObject3D('mesh');
                     if (threeGroup) {
                       const box = new THREE.Box3().setFromObject(threeGroup);
