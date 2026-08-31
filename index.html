@@ -103,11 +103,6 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /* =========================================================================
    SEEDED RANDOM + SEAMLESS PROCEDURAL NOISE
-   All planet textures are generated on <canvas> at runtime, so nothing
-   depends on external image hosting (no CORS / broken-link risk on GitHub
-   Pages). Noise is built from sums of cosines with INTEGER longitude
-   frequencies, which makes it perfectly seamless when wrapped around a
-   sphere (no visible seam at the texture edge).
    ========================================================================= */
 
 function mulberry32(seed) {
@@ -137,7 +132,7 @@ function makeSeamlessField(seed, octaves, lonBase) {
     for (const t of terms) {
       v += t.amp * Math.cos(t.kx * theta + t.phase + Math.sin(t.ky * ny * Math.PI + t.mixY) * 1.4);
     }
-    return v / norm; // approx [-1, 1]
+    return v / norm;
   };
 }
 
@@ -156,7 +151,6 @@ function hexToRgb(hex) {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-// Multi-stop gradient sampler: stops = [{p:0..1, c:[r,g,b]}...]
 function rampSample(stops, t) {
   t = clamp01(t);
   for (let i = 0; i < stops.length - 1; i++) {
@@ -169,10 +163,6 @@ function rampSample(stops, t) {
   return stops[stops.length - 1].c;
 }
 
-/**
- * Builds an equirectangular RGB canvas texture + matching grayscale bump canvas
- * for one planet, using a per-planet color/shape function.
- */
 function buildPlanetTexture(opts) {
   const w = opts.w || 512, h = opts.h || 256;
   const canvas = document.createElement("canvas");
@@ -189,13 +179,13 @@ function buildPlanetTexture(opts) {
   const detail = makeSeamlessField(opts.seed + 500, 6, (opts.lonFreq || 3) * 3);
 
   for (let y = 0; y < h; y++) {
-    const ny = y / (h - 1); // 0 = north pole, 1 = south pole
+    const ny = y / (h - 1);
     for (let x = 0; x < w; x++) {
       const nx = x / w;
       const theta = nx * Math.PI * 2;
 
       let v = base(theta, ny) * 0.75 + detail(theta * 1.0, ny) * 0.25;
-      v = (v + 1) / 2; // -> [0,1]
+      v = (v + 1) / 2;
 
       const px = opts.shade(v, nx, ny, theta);
       const idx = (y * w + x) * 4;
@@ -236,7 +226,6 @@ function sprinkleCraters(ctx, w, h, seed, count) {
     grad.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = grad;
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-    // wrap at edges for seamless craters near the border
     if (cx < r) { ctx.beginPath(); ctx.arc(cx + w, cy, r, 0, Math.PI * 2); ctx.fillStyle = grad; ctx.fill(); }
     if (cx > w - r) { ctx.beginPath(); ctx.arc(cx - w, cy, r, 0, Math.PI * 2); ctx.fillStyle = grad; ctx.fill(); }
   }
@@ -272,7 +261,6 @@ function paintPolarCaps(ctx, w, h, size) {
   ctx.fillRect(0, h - h * size, w, h * size);
 }
 
-/* ---- Cloud layer (Earth) ---- */
 function buildCloudTexture(seed) {
   const w = 512, h = 256;
   const canvas = document.createElement("canvas");
@@ -298,28 +286,23 @@ function buildCloudTexture(seed) {
   return tex;
 }
 
-/* ---- Ring texture (radial gradient with soft gap bands) ---- */
 function buildRingTexture(colorA, colorB, seed) {
   const w = 512, h = 8;
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d");
-  const rand = mulberry32(seed);
   const cA = hexToRgb(colorA), cB = hexToRgb(colorB);
   for (let x = 0; x < w; x++) {
     const t = x / w;
-    // band pattern: layered sines create concentric variation + a couple of gaps
     let band = 0.55 + 0.45 * Math.sin(t * 26 + 1.3) * Math.sin(t * 7.1);
     band *= 0.6 + 0.4 * Math.sin(t * 55 + 4.0);
     const gap1 = Math.exp(-Math.pow((t - 0.42) * 40, 2)) * 0.85;
     const gap2 = Math.exp(-Math.pow((t - 0.71) * 55, 2)) * 0.6;
     let alpha = clamp01(band - gap1 - gap2);
-    // fade at inner/outer edge
     const edgeFade = Math.min(t / 0.06, (1 - t) / 0.06, 1);
     alpha *= clamp01(edgeFade);
     const rgb = lerpColor(cA, cB, clamp01(0.5 + 0.5 * Math.sin(t * 9 + 2)));
     for (let y = 0; y < h; y++) {
-      const idx = (y * w + x) * 4;
       ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
       ctx.fillRect(x, y, 1, 1);
     }
@@ -343,7 +326,6 @@ function buildRingGeometry(innerR, outerR) {
   return geo;
 }
 
-/* ---- Name label sprite ---- */
 function buildLabelSprite(text) {
   const w = 320, h = 96;
   const canvas = document.createElement("canvas");
@@ -371,16 +353,13 @@ function buildLabelSprite(text) {
 const PLANET_DEFS = [
   {
     name: "Sun", radius: 0.16, seed: 101, emissive: true, rotSpeed: 0.03,
-    shade: (v) => {
-      const stops = [
-        { p: 0.0, c: hexToRgb("#4a0a02") },
-        { p: 0.35, c: hexToRgb("#c92e05") },
-        { p: 0.6, c: hexToRgb("#ff7a12") },
-        { p: 0.82, c: hexToRgb("#ffce4d") },
-        { p: 1.0, c: hexToRgb("#fff6d0") }
-      ];
-      return rampSample(stops, v);
-    }
+    shade: (v) => rampSample([
+      { p: 0.0, c: hexToRgb("#4a0a02") },
+      { p: 0.35, c: hexToRgb("#c92e05") },
+      { p: 0.6, c: hexToRgb("#ff7a12") },
+      { p: 0.82, c: hexToRgb("#ffce4d") },
+      { p: 1.0, c: hexToRgb("#fff6d0") }
+    ], v)
   },
   {
     name: "Mercury", radius: 0.045, seed: 102, rotSpeed: 0.05,
@@ -521,21 +500,17 @@ function init() {
   renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
 
-  // Lighting: soft ambient fill so planets read clearly from any angle,
-  // plus a warm point light near the Sun mesh for a believable glow.
   const hemi = new THREE.HemisphereLight(0xffffff, 0x223047, 1.15);
   scene.add(hemi);
   const dir = new THREE.DirectionalLight(0xffffff, 0.9);
   dir.position.set(1, 2, 1);
   scene.add(dir);
 
-  // Build the (initially hidden) solar system group.
   solarAnchor = new THREE.Group();
   solarAnchor.visible = false;
   buildSolarSystem(solarAnchor);
   scene.add(solarAnchor);
 
-  // Reticle for hit-test placement
   reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.06, 0.08, 32).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0xffcf6b, transparent: true, opacity: 0.9 })
@@ -579,15 +554,12 @@ function setupARButton() {
   });
 
   function buildARButton() {
-
     const arButton = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
       optionalFeatures: ["dom-overlay", "light-estimation"],
       domOverlay: { root: document.body }
     });
     arButton.textContent = "Start AR";
-    // ARButton sets a bunch of its own inline styles; override them wholesale
-    // (inline beats our CSS class) so it matches the rest of the UI.
     arButton.style.cssText = `
       position: static; appearance: none; border: none; cursor: pointer;
       font-size: 15px; font-weight: 600; color: #06101f;
@@ -605,18 +577,13 @@ function setupARButton() {
   controller.addEventListener("select", onSelect);
   scene.add(controller);
 
-  // --- dom-overlay + hit-test gotcha -------------------------------------
-  // When the optional "dom-overlay" feature is active (used here so the
-  // instructions/reset button can sit on top of the camera feed), taps that
-  // land on the overlay are normally consumed as plain DOM events and do
-  // NOT fire the XRInputSource "select" event placement relies on — so
-  // tapping the screen looked like it did nothing. Two fixes, belt & braces:
-  //  1) Tell the browser to still dispatch "select" for overlay taps.
-  //  2) A manual pointerdown fallback in case a browser doesn't support #1.
-  document.body.addEventListener("beforexrselect", (ev) => ev.preventDefault());
-  window.addEventListener("pointerdown", () => {
+  // Fallback tap trigger for touch inputs over dom-overlay
+  window.addEventListener("pointerdown", (e) => {
+    if (e.target && (e.target.id === "resetBtn" || e.target.id === "exitPreviewBtn" || e.target.id === "previewBtn")) {
+      return;
+    }
     if (renderer.xr.isPresenting && !placed && reticle.visible) {
-      placeSolarSystem(reticle.matrix);
+      placeSolarSystem();
     }
   });
 }
@@ -641,29 +608,25 @@ function onSessionEnd() {
 
 function onSelect() {
   if (!placed && reticle.visible) {
-    placeSolarSystem(reticle.matrix);
+    placeSolarSystem();
   }
 }
 
-function placeSolarSystem(matrix) {
+function placeSolarSystem() {
   const pos = new THREE.Vector3();
   const quat = new THREE.Quaternion();
   const scaleV = new THREE.Vector3();
-  matrix.decompose(pos, quat, scaleV);
+  
+  // Matrix holds world position calculated from hit test
+  reticle.matrix.decompose(pos, quat, scaleV);
 
-  // Face the row of planets away from where the camera was looking,
-  // but keep it perfectly level (Y-up) so the line never looks tilted.
-  // NOTE: read matrixWorld elements directly rather than calling
-  // camera.getWorldDirection() — during an XR session only matrixWorld is
-  // kept in sync by the WebXR pose, and getWorldDirection() would trigger
-  // updateWorldMatrix() from the (stale) local position/quaternion and
-  // clobber that pose.
   const xrCam = (renderer.xr.isPresenting && renderer.xr.getCamera) ? renderer.xr.getCamera() : camera;
   const e = xrCam.matrixWorld.elements;
   const camDir = new THREE.Vector3(-e[8], -e[9], -e[10]).normalize();
   const yaw = Math.atan2(camDir.x, camDir.z);
 
-  solarAnchor.position.set(pos.x, pos.y + 1.25, pos.z);
+  // Directly set Y to pos.y so planets lock flush to surface height
+  solarAnchor.position.set(pos.x, pos.y, pos.z);
   solarAnchor.rotation.set(0, yaw, 0);
   solarAnchor.visible = true;
 
@@ -682,7 +645,8 @@ function buildSolarSystem(parent) {
     }
 
     const group = new THREE.Group();
-    group.position.set(cumX, Math.sin(i * 1.7) * 0.16, Math.cos(i * 2.3) * 0.22);
+    // Offset each planet elevation slightly above ground anchor plane
+    group.position.set(cumX, def.radius + 0.05, Math.cos(i * 2.3) * 0.1);
 
     const { colorTex, bumpTex } = buildPlanetTexture({
       seed: def.seed,
@@ -714,7 +678,6 @@ function buildSolarSystem(parent) {
     rotatingParts.push({ obj: mesh, speed: def.rotSpeed });
 
     if (def.emissive) {
-      // Soft additive glow halo behind the sun
       const glowTex = buildGlowTexture();
       const glowMat = new THREE.SpriteMaterial({
         map: glowTex, color: 0xffb84d, transparent: true,
@@ -803,9 +766,6 @@ function stopPreview() {
   startScreen.classList.remove("hidden");
   solarAnchor.visible = false;
   if (previewControls) { previewControls.dispose(); previewControls = null; }
-  // NOTE: intentionally do NOT null the animation loop here — three.js's
-  // WebXR manager needs setAnimationLoop to already be active so that a
-  // subsequent "Start AR" session has a render callback to hook into.
 }
 
 /* =========================================================================
