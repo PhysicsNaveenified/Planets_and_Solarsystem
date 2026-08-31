@@ -101,10 +101,6 @@ import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-/* =========================================================================
-   SEEDED RANDOM + SEAMLESS PROCEDURAL NOISE
-   ========================================================================= */
-
 function mulberry32(seed) {
   return function () {
     seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
@@ -346,10 +342,6 @@ function buildLabelSprite(text) {
   return sprite;
 }
 
-/* =========================================================================
-   PLANET DEFINITIONS
-   ========================================================================= */
-
 const PLANET_DEFS = [
   {
     name: "Sun", radius: 0.16, seed: 101, emissive: true, rotSpeed: 0.03,
@@ -460,10 +452,6 @@ const PLANET_DEFS = [
   }
 ];
 
-/* =========================================================================
-   SCENE SETUP
-   ========================================================================= */
-
 let camera, scene, renderer;
 let reticle, controller;
 let hitTestSource = null, hitTestSourceRequested = false;
@@ -523,7 +511,8 @@ function init() {
 
   previewBtn.addEventListener("click", startPreview);
   exitPreviewBtn.addEventListener("click", stopPreview);
-  resetBtn.addEventListener("click", () => {
+  resetBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
     placed = false;
     solarAnchor.visible = false;
     reticle.visible = true;
@@ -537,14 +526,14 @@ function init() {
 function setupARButton() {
   if (!("xr" in navigator)) {
     supportNote.textContent =
-      "WebXR isn't available in this browser. On iPhone, Safari doesn't support AR here yet — try Chrome on an ARCore-capable Android phone, or use the 3D preview below.";
+      "WebXR isn't available in this browser. Try Chrome on an ARCore-capable Android phone, or use the 3D preview below.";
     return;
   }
 
   navigator.xr.isSessionSupported("immersive-ar").then((supported) => {
     if (!supported) {
       supportNote.textContent =
-        "This browser/device doesn't support WebXR AR. On iPhone, Safari doesn't support AR here yet — try Chrome on an ARCore-capable Android phone, or use the 3D preview below.";
+        "This browser/device doesn't support WebXR AR. Try Chrome on an ARCore-capable Android phone, or use the 3D preview below.";
       return;
     }
     buildARButton();
@@ -556,7 +545,7 @@ function setupARButton() {
   function buildARButton() {
     const arButton = ARButton.createButton(renderer, {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "light-estimation"],
+      optionalFeatures: ["dom-overlay"],
       domOverlay: { root: document.body }
     });
     arButton.textContent = "Start AR";
@@ -577,11 +566,8 @@ function setupARButton() {
   controller.addEventListener("select", onSelect);
   scene.add(controller);
 
-  // Fallback tap trigger for touch inputs over dom-overlay
-  window.addEventListener("pointerdown", (e) => {
-    if (e.target && (e.target.id === "resetBtn" || e.target.id === "exitPreviewBtn" || e.target.id === "previewBtn")) {
-      return;
-    }
+  // Directly capture screen touch events over the renderer element
+  renderer.domElement.addEventListener("pointerup", (e) => {
     if (renderer.xr.isPresenting && !placed && reticle.visible) {
       placeSolarSystem();
     }
@@ -613,11 +599,12 @@ function onSelect() {
 }
 
 function placeSolarSystem() {
+  if (!reticle.visible) return;
+
   const pos = new THREE.Vector3();
   const quat = new THREE.Quaternion();
   const scaleV = new THREE.Vector3();
-  
-  // Matrix holds world position calculated from hit test
+
   reticle.matrix.decompose(pos, quat, scaleV);
 
   const xrCam = (renderer.xr.isPresenting && renderer.xr.getCamera) ? renderer.xr.getCamera() : camera;
@@ -625,8 +612,8 @@ function placeSolarSystem() {
   const camDir = new THREE.Vector3(-e[8], -e[9], -e[10]).normalize();
   const yaw = Math.atan2(camDir.x, camDir.z);
 
-  // Directly set Y to pos.y so planets lock flush to surface height
-  solarAnchor.position.set(pos.x, pos.y, pos.z);
+  // Set directly to detected surface coordinates (pos.y)
+  solarAnchor.position.copy(pos);
   solarAnchor.rotation.set(0, yaw, 0);
   solarAnchor.visible = true;
 
@@ -645,7 +632,6 @@ function buildSolarSystem(parent) {
     }
 
     const group = new THREE.Group();
-    // Offset each planet elevation slightly above ground anchor plane
     group.position.set(cumX, def.radius + 0.05, Math.cos(i * 2.3) * 0.1);
 
     const { colorTex, bumpTex } = buildPlanetTexture({
@@ -738,10 +724,6 @@ function buildGlowTexture() {
   return new THREE.CanvasTexture(canvas);
 }
 
-/* =========================================================================
-   DESKTOP / NO-AR PREVIEW MODE
-   ========================================================================= */
-
 function startPreview() {
   previewMode = true;
   startScreen.classList.add("hidden");
@@ -767,10 +749,6 @@ function stopPreview() {
   solarAnchor.visible = false;
   if (previewControls) { previewControls.dispose(); previewControls = null; }
 }
-
-/* =========================================================================
-   RENDER LOOP
-   ========================================================================= */
 
 function renderLoop(timestamp, frame) {
   if (frame && !previewMode) {
