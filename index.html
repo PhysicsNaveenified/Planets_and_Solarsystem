@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Solar System Text AR</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- A-Frame & MindAR -->
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@6.1.1/dist/aframe-extras.min.js"></script>
+    
+    <!-- OCR Engine -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+      }
+
+      #hud {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.8);
+        color: #fff;
+        padding: 12px 24px;
+        border-radius: 25px;
+        font-size: 15px;
+        z-index: 1000;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        pointer-events: none;
+      }
+
+      #detected-word {
+        font-weight: bold;
+        color: #4CAF50;
+      }
+
+      #ocrCanvas {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+
+    <div id="hud">
+      Status: <span id="ocrStatus">Initializing OCR...</span><br>
+      Detected: <span id="detected-word">None</span>
+    </div>
+
+    <canvas id="ocrCanvas"></canvas>
+
+    <a-scene
+      mindar-image="imageTargetSrc: ./assets/targets.mind; filterMinCF: 0.0001; filterBeta: 0.001;"
+      vr-mode-ui="enabled: false"
+      device-orientation-permission-ui="enabled: true"
+      renderer="colorManagement: true; physicallyCorrectLights: true;">
+
+      <a-assets timeout="30000">
+        <!-- Celestial Bodies & System Models -->
+        <a-asset-item id="model-sun" src="./assets/sun.glb"></a-asset-item>
+        <a-asset-item id="model-moon" src="./assets/moon.glb"></a-asset-item>
+        <a-asset-item id="model-solar-system" src="./assets/solarsystem.glb"></a-asset-item>
+        
+        <!-- 9 Planets -->
+        <a-asset-item id="model-mercury" src="./assets/mercury.glb"></a-asset-item>
+        <a-asset-item id="model-venus" src="./assets/venus.glb"></a-asset-item>
+        <a-asset-item id="model-earth" src="./assets/earth.glb"></a-asset-item>
+        <a-asset-item id="model-mars" src="./assets/mars.glb"></a-asset-item>
+        <a-asset-item id="model-jupiter" src="./assets/jupiter.glb"></a-asset-item>
+        <a-asset-item id="model-saturn" src="./assets/saturn.glb"></a-asset-item>
+        <a-asset-item id="model-uranus" src="./assets/uranus.glb"></a-asset-item>
+        <a-asset-item id="model-neptune" src="./assets/neptune.glb"></a-asset-item>
+        <a-asset-item id="model-pluto" src="./assets/pluto.glb"></a-asset-item>
+      </a-assets>
+
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+      <a-light type="ambient" color="#ffffff" intensity="0.8"></a-light>
+      <a-light type="directional" color="#ffffff" intensity="1.2" position="1 2 1"></a-light>
+
+      <!-- Anchor for the 3D Model -->
+      <a-entity id="targetAnchor" mindar-image-target="targetIndex: 0">
+        <a-gltf-model
+          id="activeModel"
+          position="0 0 0"
+          rotation="90 0 0"
+          scale="1 1 1"
+          visible="false"
+          animation-mixer="clip: *; loop: repeat">
+        </a-gltf-model>
+      </a-entity>
+
+    </a-scene>
+
+    <script>
+      // Keyword to GLB Asset Mapping (ordered by priority/specificity)
+      const MODEL_MAP = {
+        'SOLAR SYSTEM': '#model-solar-system',
+        'SOLARSYSTEM':  '#model-solar-system',
+        'SUN':          '#model-sun',
+        'MOON':         '#model-moon',
+        'MERCURY':      '#model-mercury',
+        'VENUS':        '#model-venus',
+        'EARTH':        '#model-earth',
+        'MARS':         '#model-mars',
+        'JUPITER':      '#model-jupiter',
+        'SATURN':       '#model-saturn',
+        'URANUS':       '#model-uranus',
+        'NEPTUNE':      '#model-neptune',
+        'PLUTO':        '#model-pluto'
+      };
+
+      const statusEl = document.getElementById('ocrStatus');
+      const detectedEl = document.getElementById('detected-word');
+      const activeModel = document.getElementById('activeModel');
+      const canvas = document.getElementById('ocrCanvas');
+      const ctx = canvas.getContext('2d');
+
+      let currentActiveKey = null;
+      let isProcessing = false;
+      let ocrWorker = null;
+
+      // Auto-scale bounding box helper
+      function fitModelToTarget(entity) {
+        entity.addEventListener('model-loaded', () => {
+          const mesh = entity.getObject3D('mesh');
+          if (!mesh) return;
+
+          const box = new THREE.Box3().setFromObject(mesh);
+          const size = new THREE.Vector3();
+          box.getSize(size);
+
+          const maxDim = Math.max(size.x, size.y, size.z);
+          if (maxDim > 0) {
+            const factor = 0.8 / maxDim;
+            entity.setAttribute('scale', `${factor} ${factor} ${factor}`);
+          }
+        }, { once: true });
+      }
+
+      // Initialize Tesseract OCR Worker
+      async function initOCR() {
+        ocrWorker = await Tesseract.createWorker('eng');
+        statusEl.textContent = 'Ready — Show text to camera';
+        startTextScanLoop();
+      }
+
+      // Continuous OCR scan loop
+      async function startTextScanLoop() {
+        setInterval(async () => {
+          if (isProcessing) return;
+
+          const video = document.querySelector('video');
+          if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+          isProcessing = true;
+
+          // Downsample frame 50% for fast processing
+          canvas.width = video.videoWidth / 2;
+          canvas.height = video.videoHeight / 2;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          try {
+            const { data: { text } } = await ocrWorker.recognize(canvas);
+            // Clean recognized text to alphanumeric uppercase
+            const sanitizedText = text.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ');
+
+            for (const key of Object.keys(MODEL_MAP)) {
+              if (sanitizedText.includes(key)) {
+                if (currentActiveKey !== key) {
+                  currentActiveKey = key;
+                  detectedEl.textContent = key;
+                  
+                  // Swap and display active model
+                  activeModel.setAttribute('src', MODEL_MAP[key]);
+                  activeModel.setAttribute('visible', 'true');
+                  fitModelToTarget(activeModel);
+                }
+                break;
+              }
+            }
+          } catch (err) {
+            console.error('OCR recognition error:', err);
+          } finally {
+            isProcessing = false;
+          }
+        }, 1200);
+      }
+
+      window.addEventListener('DOMContentLoaded', initOCR);
+    </script>
+  </body>
+</html>
