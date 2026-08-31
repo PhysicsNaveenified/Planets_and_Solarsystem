@@ -3,6 +3,14 @@
   <head>
     <title>Solar System Text AR</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Speed: open connections to the CDNs as early as possible, before
+         the browser even reaches the <script> tags below. This overlaps
+         DNS + TCP + TLS handshake time with the rest of page parsing. -->
+    <link rel="preconnect" href="https://aframe.io" crossorigin>
+    <link rel="dns-prefetch" href="https://aframe.io">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
@@ -127,6 +135,14 @@
         'PLUTO':        './assets/pluto.glb'
       };
 
+      // Speed: restrict OCR to only the characters that can ever appear in
+      // a MODEL_MAP key. A smaller character set means Tesseract's LSTM
+      // recognizer has far fewer candidates to score per glyph, which
+      // measurably speeds up each recognize() call.
+      const OCR_WHITELIST = Array.from(
+        new Set(Object.keys(MODEL_MAP).join('').replace(/[^A-Z0-9]/g, '').split(''))
+      ).join('');
+
       const video = document.getElementById('camFeed');
       const statusEl = document.getElementById('ocrStatus');
       const detectedEl = document.getElementById('detected-word');
@@ -140,8 +156,29 @@
       let isProcessing = false;
       let ocrWorker = null;
       let target3DSize = 0.5;
+      let scanningStarted = false;
 
-      // 1. Start Device Camera (Original Instant Startup)
+      // Speed: camera startup and OCR-engine startup don't depend on each
+      // other, so kick both off at the same time instead of waiting for
+      // the camera to fully resolve before even starting to load
+      // Tesseract. Whichever finishes last is now the only bottleneck,
+      // instead of the sum of both.
+      let cameraReady = false;
+      let ocrReady = false;
+
+      function maybeStartScanning() {
+        if (cameraReady && ocrReady && !scanningStarted) {
+          scanningStarted = true;
+          statusEl.textContent = 'Ready — Point camera at text';
+          startTextScanLoop();
+        } else if (!cameraReady && ocrReady) {
+          statusEl.textContent = 'Waiting for camera permission...';
+        } else if (cameraReady && !ocrReady) {
+          statusEl.textContent = 'Loading OCR engine...';
+        }
+      }
+
+      // 1. Start Device Camera
       async function startCamera() {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
@@ -149,20 +186,30 @@
           });
           video.srcObject = stream;
           await video.play();
-          statusEl.textContent = 'Loading OCR Engine...';
-          initOCR();
+          cameraReady = true;
+          maybeStartScanning();
         } catch (err) {
           statusEl.textContent = 'Camera permission denied.';
           console.error(err);
         }
       }
 
-      // 2. Initialize Tesseract
+      // 2. Initialize Tesseract (runs in parallel with startCamera, not after it)
       async function initOCR() {
         try {
           ocrWorker = await Tesseract.createWorker('eng');
-          statusEl.textContent = 'Ready — Point camera at text';
-          startTextScanLoop();
+
+          // Speed: SPARSE_TEXT skips full-page layout/orientation analysis
+          // and just hunts for text blobs, which is what we want for a
+          // single label on a page. Combined with the whitelist, each
+          // recognize() call is noticeably faster than the defaults.
+          await ocrWorker.setParameters({
+            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+            tessedit_char_whitelist: OCR_WHITELIST
+          });
+
+          ocrReady = true;
+          maybeStartScanning();
         } catch (err) {
           statusEl.textContent = 'OCR initialization failed.';
           console.error(err);
@@ -212,84 +259,105 @@
       });
 
       // 4. Text Recognition Loop with text-boundary matching
-      async function startTextScanLoop() {
-        setInterval(async () => {
-          if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+      //    Speed: self-scheduling loop instead of a fixed 1000ms
+      //    setInterval. As soon as one recognize() call finishes, the
+      //    next one is queued almost immediately, so detection happens
+      //    as fast as the device can actually process frames instead of
+      //    always waiting out a full second regardless of how fast the
+      //    previous scan was.
+      const MIN_SCAN_GAP_MS = 80;
 
-          isProcessing = true;
+      function scheduleNextScan() {
+        setTimeout(runScan, MIN_SCAN_GAP_MS);
+      }
 
-          const scale = 480 / video.videoWidth;
-          canvas.width = 480;
-          canvas.height = video.videoHeight * scale;
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      async function runScan() {
+        if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) {
+          scheduleNextScan();
+          return;
+        }
 
-          try {
-            const { data } = await ocrWorker.recognize(canvas);
+        isProcessing = true;
 
-            if (data && data.words) {
-              for (const wordObj of data.words) {
-                const cleanWord = wordObj.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const scale = 480 / video.videoWidth;
+        canvas.width = 480;
+        canvas.height = video.videoHeight * scale;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                for (const key of Object.keys(MODEL_MAP)) {
-                  const cleanKey = key.replace(/\s+/g, '');
-                  if (cleanWord === cleanKey || cleanWord.includes(cleanKey)) {
-                    
-                    // Compute text bounding dimensions
-                    const bbox = wordObj.bbox;
-                    const textCenterX = (bbox.x0 + bbox.x1) / 2;
-                    const textCenterY = (bbox.y0 + bbox.y1) / 2;
-                    const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
+        try {
+          const { data } = await ocrWorker.recognize(canvas);
 
-                    // Perspective transformation to Z = -2.0 meters
-                    const planeZ = -2.0;
-                    const fovRad = (80 * Math.PI) / 180;
-                    const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
-                    const planeHalfW = planeHalfH * (window.innerWidth / window.innerHeight);
+          if (data && data.words) {
+            for (const wordObj of data.words) {
+              const cleanWord = wordObj.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-                    const posX = ((textCenterX / canvas.width) * 2 - 1) * planeHalfW;
-                    const posY = -((textCenterY / canvas.height) * 2 - 1) * planeHalfH;
+              for (const key of Object.keys(MODEL_MAP)) {
+                const cleanKey = key.replace(/\s+/g, '');
+                if (cleanWord === cleanKey || cleanWord.includes(cleanKey)) {
+                  
+                  // Compute text bounding dimensions
+                  const bbox = wordObj.bbox;
+                  const textCenterX = (bbox.x0 + bbox.x1) / 2;
+                  const textCenterY = (bbox.y0 + bbox.y1) / 2;
+                  const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
 
-                    // Size model directly to the detected word width
-                    target3DSize = Math.max((textPixelWidth / canvas.width) * (planeHalfW * 2), 0.25);
+                  // Perspective transformation to Z = -2.0 meters
+                  const planeZ = -2.0;
+                  const fovRad = (80 * Math.PI) / 180;
+                  const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
+                  const planeHalfW = planeHalfH * (window.innerWidth / window.innerHeight);
 
-                    modelPivot.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
+                  const posX = ((textCenterX / canvas.width) * 2 - 1) * planeHalfW;
+                  const posY = -((textCenterY / canvas.height) * 2 - 1) * planeHalfH;
 
-                    // Apply updated scale to the existing model if already loaded
-                    const obj = activeModel.getObject3D('mesh');
-                    if (obj) {
-                      const box = new THREE.Box3().setFromObject(obj);
-                      const size = new THREE.Vector3();
-                      box.getSize(size);
-                      const maxDim = Math.max(size.x, size.y, size.z);
-                      if (maxDim > 0) {
-                        const s = target3DSize / maxDim;
-                        activeModel.setAttribute('scale', `${s} ${s} ${s}`);
-                      }
+                  // Size model directly to the detected word width
+                  target3DSize = Math.max((textPixelWidth / canvas.width) * (planeHalfW * 2), 0.25);
+
+                  modelPivot.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
+
+                  // Apply updated scale to the existing model if already loaded
+                  const obj = activeModel.getObject3D('mesh');
+                  if (obj) {
+                    const box = new THREE.Box3().setFromObject(obj);
+                    const size = new THREE.Vector3();
+                    box.getSize(size);
+                    const maxDim = Math.max(size.x, size.y, size.z);
+                    if (maxDim > 0) {
+                      const s = target3DSize / maxDim;
+                      activeModel.setAttribute('scale', `${s} ${s} ${s}`);
                     }
-
-                    if (currentActiveKey !== key) {
-                      currentActiveKey = key;
-                      detectedEl.textContent = key;
-                      modelStatusEl.textContent = `Loading ${key}...`;
-                      
-                      activeModel.setAttribute('gltf-model', MODEL_MAP[key]);
-                    }
-
-                    modelPivot.setAttribute('visible', 'true');
-                    break;
                   }
+
+                  if (currentActiveKey !== key) {
+                    currentActiveKey = key;
+                    detectedEl.textContent = key;
+                    modelStatusEl.textContent = `Loading ${key}...`;
+                    
+                    activeModel.setAttribute('gltf-model', MODEL_MAP[key]);
+                  }
+
+                  modelPivot.setAttribute('visible', 'true');
+                  break;
                 }
               }
             }
-          } catch (err) {
-            console.error('OCR Error:', err);
-          } finally {
-            isProcessing = false;
           }
-        }, 1000);
+        } catch (err) {
+          console.error('OCR Error:', err);
+        } finally {
+          isProcessing = false;
+          scheduleNextScan();
+        }
       }
 
-      window.addEventListener('DOMContentLoaded', startCamera);
+      function startTextScanLoop() {
+        runScan();
+      }
+
+      window.addEventListener('DOMContentLoaded', () => {
+        startCamera();
+        initOCR();
+      });
     </script>
   </body>
 </html>
