@@ -2,11 +2,13 @@
 <html>
   <head>
     <title>Solar System Text AR</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <!-- OCR Engine -->
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@6.1.1/dist/aframe-extras.min.js"></script>
+    
+    <!-- Fast OCR Engine -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
@@ -20,9 +22,9 @@
         font-family: Arial, sans-serif;
       }
 
-      /* Native camera stream strictly behind WebGL */
+      /* Camera feed strictly behind WebGL scene */
       #camFeed {
-        position: fixed;
+        position: absolute;
         top: 0;
         left: 0;
         width: 100vw;
@@ -31,7 +33,7 @@
         z-index: 1;
       }
 
-      /* A-Frame transparent canvas overlay */
+      /* A-Frame canvas overlaid on top of video */
       .a-canvas {
         position: absolute !important;
         top: 0 !important;
@@ -49,9 +51,9 @@
         transform: translateX(-50%);
         background: rgba(0, 0, 0, 0.85);
         color: #fff;
-        padding: 10px 22px;
+        padding: 12px 24px;
         border-radius: 20px;
-        font-size: 14px;
+        font-size: 15px;
         z-index: 100;
         text-align: center;
         box-shadow: 0 4px 15px rgba(0,0,0,0.6);
@@ -65,9 +67,9 @@
 
       #model-status {
         color: #FFC107;
-        font-size: 12px;
+        font-size: 13px;
+        margin-top: 4px;
         display: block;
-        margin-top: 2px;
       }
 
       #ocrCanvas {
@@ -77,31 +79,33 @@
   </head>
   <body>
 
-    <!-- Camera Feed -->
-    <video id="camFeed" autoplay playsinline webkit-playsinline muted></video>
+    <!-- Camera Background -->
+    <video id="camFeed" autoplay playsinline muted></video>
 
     <!-- Status HUD -->
     <div id="hud">
-      Status: <span id="ocrStatus">Opening camera...</span><br>
+      Status: <span id="ocrStatus">Starting camera...</span><br>
       Detected: <span id="detected-word">None</span>
       <span id="model-status"></span>
     </div>
 
     <canvas id="ocrCanvas"></canvas>
 
-    <!-- Transparent WebGL AR Scene -->
+    <!-- Transparent WebGL Scene -->
     <a-scene 
       embedded 
       vr-mode-ui="enabled: false"
-      renderer="alpha: true; antialias: false; powerPreference: high-performance; precision: lowp; colorManagement: true;">
+      renderer="alpha: true; antialias: true; colorManagement: true;">
       
+      <!-- Camera -->
       <a-camera id="arCamera" position="0 0 0" look-controls="enabled: false" fov="80"></a-camera>
 
+      <!-- Balanced Lighting -->
       <a-light type="ambient" color="#ffffff" intensity="1.5"></a-light>
       <a-light type="directional" color="#ffffff" intensity="2.0" position="2 4 3"></a-light>
 
-      <!-- Stationary AR anchor placed directly over detected text -->
-      <a-entity id="textTracker" position="0 0 -2" visible="false">
+      <!-- Stationary 3D Anchor placed over detected text -->
+      <a-entity id="modelPivot" position="0 0 -2.5" rotation="0 0 0" visible="false">
         <a-entity id="activeModel"></a-entity>
       </a-entity>
     </a-scene>
@@ -127,174 +131,133 @@
       const statusEl = document.getElementById('ocrStatus');
       const detectedEl = document.getElementById('detected-word');
       const modelStatusEl = document.getElementById('model-status');
-      const textTracker = document.getElementById('textTracker');
       const activeModel = document.getElementById('activeModel');
+      const modelPivot = document.getElementById('modelPivot');
       const canvas = document.getElementById('ocrCanvas');
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const ctx = canvas.getContext('2d');
 
       let currentActiveKey = null;
       let isProcessing = false;
       let ocrWorker = null;
-      let lastSeenTime = 0;
       let target3DSize = 0.5;
-      const HIDE_TIMEOUT_MS = 1400;
 
-      // 1. Instant Camera Opening (Zero Loops, Direct Hardware Access)
+      // 1. Start Device Camera (Original Instant Startup)
       async function startCamera() {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' } },
-            audio: false
+            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
           });
           video.srcObject = stream;
           await video.play();
-          
-          // Camera is already rendering; now download OCR in the background
-          statusEl.textContent = 'Preparing text scanner...';
-          setTimeout(initOCR, 50);
+          statusEl.textContent = 'Loading OCR Engine...';
+          initOCR();
         } catch (err) {
-          // Absolute minimal fallback if back-camera query fails
-          try {
-            const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-            video.srcObject = fallbackStream;
-            await video.play();
-            statusEl.textContent = 'Preparing text scanner...';
-            setTimeout(initOCR, 50);
-          } catch (e) {
-            statusEl.textContent = 'Camera blocked. Please allow permissions.';
-          }
-        }
-      }
-
-      // 2. Background Asynchronous OCR Initialization
-      async function initOCR() {
-        try {
-          ocrWorker = await Tesseract.createWorker('eng', 1, {
-            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
-            corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd.wasm.js'
-          });
-
-          await ocrWorker.setParameters({
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',
-            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT
-          });
-
-          statusEl.textContent = 'Ready — Point camera at text';
-          startTextScanLoop();
-          startVisibilityWatchdog();
-        } catch (err) {
-          statusEl.textContent = 'Scanner engine error.';
+          statusEl.textContent = 'Camera permission denied.';
           console.error(err);
         }
       }
 
-      // 3. Normalize, center, clear animations, and match text dimensions
+      // 2. Initialize Tesseract
+      async function initOCR() {
+        try {
+          ocrWorker = await Tesseract.createWorker('eng');
+          statusEl.textContent = 'Ready — Point camera at text';
+          startTextScanLoop();
+        } catch (err) {
+          statusEl.textContent = 'OCR initialization failed.';
+          console.error(err);
+        }
+      }
+
+      // 3. Center model and scale to detected text size (No rotation / revolution)
       activeModel.addEventListener('model-loaded', () => {
-        const threeGroup = activeModel.getObject3D('mesh');
-        if (!threeGroup) return;
+        const obj = activeModel.getObject3D('mesh');
+        if (!obj) return;
 
-        // Clear embedded animation tracks to keep model completely static
-        if (threeGroup.animations) {
-          threeGroup.animations.length = 0;
+        // Strip embedded animation tracks to kill orbital translations
+        if (obj.animations) {
+          obj.animations.length = 0;
         }
 
-        threeGroup.position.set(0, 0, 0);
-        threeGroup.rotation.set(0, 0, 0);
-        threeGroup.scale.set(1, 1, 1);
-        threeGroup.updateMatrixWorld(true);
+        // Lock rotations and positions to zero
+        obj.position.set(0, 0, 0);
+        obj.rotation.set(0, 0, 0);
+        obj.scale.set(1, 1, 1);
+        obj.updateMatrixWorld(true);
 
-        const bbox = new THREE.Box3().setFromObject(threeGroup);
-        const center = new THREE.Vector3();
+        // Calculate actual bounding box
+        const box = new THREE.Box3().setFromObject(obj);
         const size = new THREE.Vector3();
-        bbox.getCenter(center);
-        bbox.getSize(size);
+        const center = new THREE.Vector3();
+        box.getSize(size);
+        box.getCenter(center);
 
-        threeGroup.traverse((child) => {
-          if (child.isMesh) {
-            child.geometry.computeBoundingBox();
-            child.position.sub(center);
-          }
-        });
+        // Shift inner geometry so geometric center is exact (0, 0, 0)
+        obj.position.sub(center);
 
-        const maxMeshDim = Math.max(size.x, size.y, size.z);
-        if (maxMeshDim > 0) {
-          const baseScale = target3DSize / maxMeshDim;
-          activeModel.setAttribute('scale', `${baseScale} ${baseScale} ${baseScale}`);
+        // Scale proportionally to fit the text boundaries
+        const maxDimension = Math.max(size.x, size.y, size.z);
+        if (maxDimension > 0) {
+          const desiredScale = target3DSize / maxDimension;
+          activeModel.setAttribute('scale', `${desiredScale} ${desiredScale} ${desiredScale}`);
         }
 
-        activeModel.setAttribute('visible', 'true');
+        modelPivot.setAttribute('visible', 'true');
         modelStatusEl.textContent = '';
       });
 
       activeModel.addEventListener('model-error', (err) => {
-        modelStatusEl.textContent = 'Model file not found (404)';
+        modelStatusEl.textContent = 'Failed to load model file (404/CORS)';
         console.error('GLTF Load Error:', err);
       });
 
-      // 4. Auto-hide watchdog when text leaves frame
-      function startVisibilityWatchdog() {
-        function check() {
-          if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
-            textTracker.setAttribute('visible', 'false');
-            detectedEl.textContent = 'None';
-            currentActiveKey = null;
-          }
-          requestAnimationFrame(check);
-        }
-        check();
-      }
-
-      // 5. Detection loop
+      // 4. Text Recognition Loop with text-boundary matching
       async function startTextScanLoop() {
         setInterval(async () => {
-          if (isProcessing || !ocrWorker || video.readyState < 2) return;
+          if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
 
           isProcessing = true;
 
-          const scanW = 320;
-          const scanH = Math.round(video.videoHeight * (scanW / video.videoWidth)) || 240;
-          canvas.width = scanW;
-          canvas.height = scanH;
-          ctx.drawImage(video, 0, 0, scanW, scanH);
+          const scale = 480 / video.videoWidth;
+          canvas.width = 480;
+          canvas.height = video.videoHeight * scale;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
           try {
             const { data } = await ocrWorker.recognize(canvas);
-            let matchFound = false;
 
             if (data && data.words) {
               for (const wordObj of data.words) {
-                const cleanedText = wordObj.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                const cleanWord = wordObj.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
                 for (const key of Object.keys(MODEL_MAP)) {
-                  const keyCleaned = key.replace(/\s+/g, '');
-                  if (cleanedText === keyCleaned || cleanedText.includes(keyCleaned)) {
-                    matchFound = true;
-                    lastSeenTime = Date.now();
-
+                  const cleanKey = key.replace(/\s+/g, '');
+                  if (cleanWord === cleanKey || cleanWord.includes(cleanKey)) {
+                    
+                    // Compute text bounding dimensions
                     const bbox = wordObj.bbox;
                     const textCenterX = (bbox.x0 + bbox.x1) / 2;
                     const textCenterY = (bbox.y0 + bbox.y1) / 2;
                     const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
 
-                    const ndcX = (textCenterX / scanW) * 2 - 1;
-                    const ndcY = -((textCenterY / scanH) * 2 - 1);
-
+                    // Perspective transformation to Z = -2.0 meters
                     const planeZ = -2.0;
                     const fovRad = (80 * Math.PI) / 180;
                     const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
                     const planeHalfW = planeHalfH * (window.innerWidth / window.innerHeight);
 
-                    const posX = ndcX * planeHalfW;
-                    const posY = ndcY * planeHalfH;
+                    const posX = ((textCenterX / canvas.width) * 2 - 1) * planeHalfW;
+                    const posY = -((textCenterY / canvas.height) * 2 - 1) * planeHalfH;
 
-                    const text3DWidth = (textPixelWidth / scanW) * (planeHalfW * 2);
-                    target3DSize = Math.max(text3DWidth, 0.25);
+                    // Size model directly to the detected word width
+                    target3DSize = Math.max((textPixelWidth / canvas.width) * (planeHalfW * 2), 0.25);
 
-                    textTracker.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
+                    modelPivot.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
 
-                    const threeGroup = activeModel.getObject3D('mesh');
-                    if (threeGroup) {
-                      const box = new THREE.Box3().setFromObject(threeGroup);
+                    // Apply updated scale to the existing model if already loaded
+                    const obj = activeModel.getObject3D('mesh');
+                    if (obj) {
+                      const box = new THREE.Box3().setFromObject(obj);
                       const size = new THREE.Vector3();
                       box.getSize(size);
                       const maxDim = Math.max(size.x, size.y, size.z);
@@ -308,22 +271,22 @@
                       currentActiveKey = key;
                       detectedEl.textContent = key;
                       modelStatusEl.textContent = `Loading ${key}...`;
+                      
                       activeModel.setAttribute('gltf-model', MODEL_MAP[key]);
                     }
 
-                    textTracker.setAttribute('visible', 'true');
+                    modelPivot.setAttribute('visible', 'true');
                     break;
                   }
                 }
-                if (matchFound) break;
               }
             }
           } catch (err) {
-            console.error('Scan Error:', err);
+            console.error('OCR Error:', err);
           } finally {
             isProcessing = false;
           }
-        }, 500);
+        }, 1000);
       }
 
       window.addEventListener('DOMContentLoaded', startCamera);
