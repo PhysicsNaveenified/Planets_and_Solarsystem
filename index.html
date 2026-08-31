@@ -604,6 +604,21 @@ function setupARButton() {
   controller = renderer.xr.getController(0);
   controller.addEventListener("select", onSelect);
   scene.add(controller);
+
+  // --- dom-overlay + hit-test gotcha -------------------------------------
+  // When the optional "dom-overlay" feature is active (used here so the
+  // instructions/reset button can sit on top of the camera feed), taps that
+  // land on the overlay are normally consumed as plain DOM events and do
+  // NOT fire the XRInputSource "select" event placement relies on — so
+  // tapping the screen looked like it did nothing. Two fixes, belt & braces:
+  //  1) Tell the browser to still dispatch "select" for overlay taps.
+  //  2) A manual pointerdown fallback in case a browser doesn't support #1.
+  document.body.addEventListener("beforexrselect", (ev) => ev.preventDefault());
+  window.addEventListener("pointerdown", () => {
+    if (renderer.xr.isPresenting && !placed && reticle.visible) {
+      placeSolarSystem(reticle.matrix);
+    }
+  });
 }
 
 function onSessionStart() {
