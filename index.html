@@ -7,9 +7,9 @@
     <!-- Speed: open connections to the CDNs as early as possible, before
          the browser even reaches the <script> tags below. This overlaps
          DNS + TCP + TLS handshake time with the rest of page parsing. -->
-    <link rel="preconnect" href="https://aframe.io" crossorigin>
+    <link rel="preconnect" href="https://aframe.io">
     <link rel="dns-prefetch" href="https://aframe.io">
-    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     
     <!-- Core A-Frame -->
@@ -165,8 +165,11 @@
       // instead of the sum of both.
       let cameraReady = false;
       let ocrReady = false;
+      let cameraFailed = false; // once true, camera status is final — never overwrite it
 
       function maybeStartScanning() {
+        if (cameraFailed) return; // preserve the real error message, don't clobber it
+
         if (cameraReady && ocrReady && !scanningStarted) {
           scanningStarted = true;
           statusEl.textContent = 'Ready — Point camera at text';
@@ -181,6 +184,16 @@
       // 1. Start Device Camera
       async function startCamera() {
         try {
+          if (!window.isSecureContext) {
+            throw new Error(
+              'Camera requires HTTPS or localhost. This page was opened over an insecure origin (' +
+              location.protocol + ').'
+            );
+          }
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('getUserMedia is not available in this browser/context.');
+          }
+
           const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
           });
@@ -189,7 +202,18 @@
           cameraReady = true;
           maybeStartScanning();
         } catch (err) {
-          statusEl.textContent = 'Camera permission denied.';
+          cameraFailed = true;
+          // Surface the real reason instead of a generic message, so a
+          // stuck state is actually diagnosable.
+          let reason = err && err.message ? err.message : 'Unknown error';
+          if (err && err.name === 'NotAllowedError') {
+            reason = 'Permission denied. Allow camera access for this site and reload.';
+          } else if (err && err.name === 'NotFoundError') {
+            reason = 'No camera device found.';
+          } else if (err && err.name === 'NotReadableError') {
+            reason = 'Camera is already in use by another app.';
+          }
+          statusEl.textContent = 'Camera error: ' + reason;
           console.error(err);
         }
       }
