@@ -84,14 +84,12 @@
       
       <a-camera id="arCamera" position="0 0 0" look-controls="enabled: false" fov="80"></a-camera>
 
-      <a-light type="ambient" color="#ffffff" intensity="1.4"></a-light>
-      <a-light type="directional" color="#ffffff" intensity="1.8" position="2 4 3"></a-light>
+      <a-light type="ambient" color="#ffffff" intensity="1.5"></a-light>
+      <a-light type="directional" color="#ffffff" intensity="2.0" position="2 4 3"></a-light>
 
-      <!-- Anchored directly over detected text -->
+      <!-- Positioned directly at the 3D center of the detected text -->
       <a-entity id="textTracker" position="0 0 -2" visible="false">
-        <a-entity id="spinner">
-          <a-entity id="activeModel"></a-entity>
-        </a-entity>
+        <a-entity id="activeModel"></a-entity>
       </a-entity>
     </a-scene>
 
@@ -116,7 +114,6 @@
       const statusEl = document.getElementById('ocrStatus');
       const detectedEl = document.getElementById('detected-word');
       const textTracker = document.getElementById('textTracker');
-      const spinner = document.getElementById('spinner');
       const activeModel = document.getElementById('activeModel');
       const canvas = document.getElementById('ocrCanvas');
       const ctx = canvas.getContext('2d');
@@ -125,6 +122,7 @@
       let isProcessing = false;
       let ocrWorker = null;
       let lastSeenTime = 0;
+      let target3DSize = 0.5; // Calculated dynamically from the text bounding box
       const HIDE_TIMEOUT_MS = 1400;
 
       async function startCamera() {
@@ -147,61 +145,74 @@
           ocrWorker = await Tesseract.createWorker('eng');
           statusEl.textContent = 'Ready — Point camera at text';
           startTextScanLoop();
-          startPerpendicularSpin();
+          startTrueSpinLoop();
         } catch (err) {
           statusEl.textContent = 'OCR initialization failed.';
           console.error(err);
         }
       }
 
-      // Hard-centers every sub-mesh and strips orbital animation tracks
+      // Hard-centers geometry inside a Three.js Group so rotation is 100% on-axis
       activeModel.addEventListener('model-loaded', () => {
-        const root = activeModel.getObject3D('mesh');
-        if (!root) return;
+        const threeGroup = activeModel.getObject3D('mesh');
+        if (!threeGroup) return;
 
-        // Strip embedded animations that cause orbital translations
-        if (root.animations && root.animations.length > 0) {
-          root.animations.forEach((clip) => {
-            // Remove position tracks; keep only local rotations if any
-            clip.tracks = clip.tracks.filter(t => !t.name.endsWith('.position'));
-          });
+        // Strip any embedded animation tracks to kill orbital translations
+        if (threeGroup.animations) {
+          threeGroup.animations.length = 0;
         }
 
-        // Calculate full group bounding box across all children
-        const box = new THREE.Box3().setFromObject(root);
+        // Reset group coordinates
+        threeGroup.position.set(0, 0, 0);
+        threeGroup.rotation.set(0, 0, 0);
+        threeGroup.scale.set(1, 1, 1);
+        threeGroup.updateMatrixWorld(true);
+
+        // Compute true bounding box across all child meshes
+        const bbox = new THREE.Box3().setFromObject(threeGroup);
         const center = new THREE.Vector3();
         const size = new THREE.Vector3();
-        box.getCenter(center);
-        box.getSize(size);
+        bbox.getCenter(center);
+        bbox.getSize(size);
 
-        // Lock all children positions directly to center (0,0,0)
-        root.position.x = -center.x;
-        root.position.y = -center.y;
-        root.position.z = -center.z;
+        // Shift inner children so the true bounding center is (0, 0, 0)
+        threeGroup.traverse((child) => {
+          if (child.isMesh) {
+            child.geometry.computeBoundingBox();
+            child.position.sub(center);
+          }
+        });
 
-        const maxDim = Math.max(size.x, size.y, size.z);
-        if (maxDim > 0) {
-          const desiredScale = 0.85 / maxDim;
-          activeModel.setAttribute('scale', `${desiredScale} ${desiredScale} ${desiredScale}`);
+        // Recalculate normalized scale based on the text bounding box size
+        const maxMeshDim = Math.max(size.x, size.y, size.z);
+        if (maxMeshDim > 0) {
+          const baseScale = target3DSize / maxMeshDim;
+          activeModel.setAttribute('scale', `${baseScale} ${baseScale} ${baseScale}`);
         }
       });
 
-      // Pure on-axis rotation perpendicular to the screen (around Z-axis)
-      function startPerpendicularSpin() {
-        let currentRot = 0;
-        function renderLoop() {
-          currentRot = (currentRot + 0.6) % 360;
-          spinner.setAttribute('rotation', `0 0 ${currentRot}`);
+      // Pure on-axis rotation (perpendicular to camera/text plane around Z-axis)
+      function startTrueSpinLoop() {
+        let angle = 0;
+        function render() {
+          angle = (angle + 0.015) % (Math.PI * 2);
 
+          const threeGroup = activeModel.getObject3D('mesh');
+          if (threeGroup) {
+            // Directly rotate the Three.js mesh along the perpendicular Z-axis
+            threeGroup.rotation.z = angle;
+          }
+
+          // Auto-hide when text disappears from frame
           if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
             textTracker.setAttribute('visible', 'false');
             detectedEl.textContent = 'None';
             currentActiveKey = null;
           }
 
-          requestAnimationFrame(renderLoop);
+          requestAnimationFrame(render);
         }
-        renderLoop();
+        render();
       }
 
       async function startTextScanLoop() {
@@ -230,15 +241,16 @@
                     matchFound = true;
                     lastSeenTime = Date.now();
 
-                    // Calculate text bounding box center
                     const bbox = wordObj.bbox;
                     const textCenterX = (bbox.x0 + bbox.x1) / 2;
                     const textCenterY = (bbox.y0 + bbox.y1) / 2;
+                    const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
 
-                    // Map to 3D view plane coordinates
+                    // Map 2D pixel coordinates to normalized device coordinates (-1 to 1)
                     const ndcX = (textCenterX / scanW) * 2 - 1;
                     const ndcY = -((textCenterY / scanH) * 2 - 1);
 
+                    // Perspective projection at plane Z = -2.0 meters
                     const planeZ = -2.0;
                     const fovRad = (80 * Math.PI) / 180;
                     const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
@@ -247,7 +259,24 @@
                     const posX = ndcX * planeHalfW;
                     const posY = ndcY * planeHalfH;
 
+                    // Convert detected word width in pixels to exact 3D world meters
+                    const text3DWidth = (textPixelWidth / scanW) * (planeHalfW * 2);
+                    target3DSize = Math.max(text3DWidth, 0.25); // Set model boundary strictly to text size
+
                     textTracker.setAttribute('position', `${posX.toFixed(3)} ${posY.toFixed(3)} ${planeZ}`);
+
+                    // Apply updated scale directly to fit text boundaries
+                    const threeGroup = activeModel.getObject3D('mesh');
+                    if (threeGroup) {
+                      const box = new THREE.Box3().setFromObject(threeGroup);
+                      const size = new THREE.Vector3();
+                      box.getSize(size);
+                      const maxDim = Math.max(size.x, size.y, size.z);
+                      if (maxDim > 0) {
+                        const s = target3DSize / maxDim;
+                        activeModel.setAttribute('scale', `${s} ${s} ${s}`);
+                      }
+                    }
 
                     if (currentActiveKey !== key) {
                       currentActiveKey = key;
@@ -267,7 +296,7 @@
           } finally {
             isProcessing = false;
           }
-        }, 800);
+        }, 750);
       }
 
       window.addEventListener('DOMContentLoaded', startCamera);
