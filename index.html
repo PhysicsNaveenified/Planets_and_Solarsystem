@@ -1,263 +1,221 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>3D GLB Solar System Walkthrough</title>
+    <title>WebXR AR Solar System</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     
-    <!-- Core A-Frame -->
-    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <!-- Three.js + WebXR Modules -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/webxr/ARButton.js"></script>
 
     <style>
-      html, body {
+      body {
         margin: 0;
-        padding: 0;
-        width: 100%;
-        height: 100%;
         overflow: hidden;
         background-color: #000;
         font-family: Arial, sans-serif;
       }
-
-      /* Camera Feed strictly behind WebGL */
-      #camFeed {
+      #instruction {
         position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        object-fit: cover;
-        z-index: 1;
-      }
-
-      /* Transparent A-Frame canvas */
-      .a-canvas {
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100% !important;
-        height: 100% !important;
-        z-index: 2 !important;
-        background: transparent !important;
-      }
-
-      #ui-panel {
-        position: fixed;
-        bottom: 25px;
+        top: 20px;
         left: 50%;
         transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.85);
+        background: rgba(0, 0, 0, 0.8);
         color: #fff;
-        padding: 10px 24px;
-        border-radius: 25px;
+        padding: 10px 22px;
+        border-radius: 20px;
         font-size: 14px;
-        z-index: 100;
+        z-index: 1000;
         text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.6);
         pointer-events: none;
+      }
+      #ar-button-container {
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
       }
     </style>
   </head>
   <body>
 
-    <!-- Camera Feed Background -->
-    <video id="camFeed" autoplay playsinline webkit-playsinline muted></video>
-
-    <!-- Overlay HUD -->
-    <div id="ui-panel">
-      🪐 Walk around your room to view the solar system
-    </div>
-
-    <!-- WebGL AR Scene -->
-    <a-scene 
-      embedded 
-      vr-mode-ui="enabled: false"
-      renderer="alpha: true; antialias: true; colorManagement: true;">
-      
-      <!-- Device Camera with Gyroscope & Look Controls -->
-      <a-camera id="arCamera" position="0 1.2 0" look-controls="enabled: true"></a-camera>
-
-      <!-- Balanced Lighting -->
-      <a-light type="ambient" color="#ffffff" intensity="1.4"></a-light>
-      <a-light type="directional" color="#ffffff" intensity="2.0" position="2 5 2"></a-light>
-
-      <!-- Solar System Lineup in AR (Placed ~1.8m in front of user) -->
-      <a-entity id="solarSystemRoot" position="0 0 -1.8">
-
-        <!-- SUN -->
-        <a-entity position="-2.6 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="0.2">
-            <a-entity gltf-model="./assets/sun.glb" class="planet-model" data-size="0.65"></a-entity>
-          </a-entity>
-          <a-text value="SUN" align="center" position="0 0.5 0" scale="0.45 0.45 0.45" color="#fff"></a-text>
-        </a-entity>
-
-        <!-- MERCURY -->
-        <a-entity position="-1.8 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="0.5">
-            <a-entity gltf-model="./assets/mercury.glb" class="planet-model" data-size="0.14"></a-entity>
-          </a-entity>
-          <a-text value="Mercury" align="center" position="0 0.22 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- VENUS -->
-        <a-entity position="-1.35 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="-0.3">
-            <a-entity gltf-model="./assets/venus.glb" class="planet-model" data-size="0.22"></a-entity>
-          </a-entity>
-          <a-text value="Venus" align="center" position="0 0.26 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- EARTH & MOON PAIR -->
-        <a-entity position="-0.85 0 0" class="planet-container">
-          <!-- Earth -->
-          <a-entity class="spinner" data-speed="0.8">
-            <a-entity gltf-model="./assets/earth.glb" class="planet-model" data-size="0.24"></a-entity>
-          </a-entity>
-          <!-- Moon slightly offset to the side -->
-          <a-entity position="0.22 0.08 0">
-            <a-entity class="spinner" data-speed="0.4">
-              <a-entity gltf-model="./assets/moon.glb" class="planet-model" data-size="0.08"></a-entity>
-            </a-entity>
-            <a-text value="Moon" align="center" position="0 0.12 0" scale="0.25 0.25 0.25" color="#aaa"></a-text>
-          </a-entity>
-          <a-text value="Earth" align="center" position="0 0.28 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- MARS -->
-        <a-entity position="-0.35 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="0.7">
-            <a-entity gltf-model="./assets/mars.glb" class="planet-model" data-size="0.18"></a-entity>
-          </a-entity>
-          <a-text value="Mars" align="center" position="0 0.24 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- JUPITER -->
-        <a-entity position="0.25 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="1.4">
-            <a-entity gltf-model="./assets/jupiter.glb" class="planet-model" data-size="0.45"></a-entity>
-          </a-entity>
-          <a-text value="Jupiter" align="center" position="0 0.38 0" scale="0.4 0.4 0.4" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- SATURN -->
-        <a-entity position="0.95 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="1.2">
-            <a-entity gltf-model="./assets/saturn.glb" class="planet-model" data-size="0.42"></a-entity>
-          </a-entity>
-          <a-text value="Saturn" align="center" position="0 0.36 0" scale="0.4 0.4 0.4" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- URANUS -->
-        <a-entity position="1.65 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="1.0">
-            <a-entity gltf-model="./assets/uranus.glb" class="planet-model" data-size="0.30"></a-entity>
-          </a-entity>
-          <a-text value="Uranus" align="center" position="0 0.30 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- NEPTUNE -->
-        <a-entity position="2.25 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="0.9">
-            <a-entity gltf-model="./assets/neptune.glb" class="planet-model" data-size="0.28"></a-entity>
-          </a-entity>
-          <a-text value="Neptune" align="center" position="0 0.28 0" scale="0.35 0.35 0.35" color="#ddd"></a-text>
-        </a-entity>
-
-        <!-- PLUTO -->
-        <a-entity position="2.75 0 0" class="planet-container">
-          <a-entity class="spinner" data-speed="0.3">
-            <a-entity gltf-model="./assets/pluto.glb" class="planet-model" data-size="0.10"></a-entity>
-          </a-entity>
-          <a-text value="Pluto" align="center" position="0 0.18 0" scale="0.3 0.3 0.3" color="#bbb"></a-text>
-        </a-entity>
-
-      </a-entity>
-
-    </a-scene>
+    <div id="instruction">Point camera at floor and tap screen to place planets</div>
+    <div id="ar-button-container"></div>
 
     <script>
-      const video = document.getElementById('camFeed');
+      let camera, scene, renderer;
+      let controller, reticle;
+      let hitTestSource = null;
+      let hitTestSourceRequested = false;
+      let solarSystemGroup = null;
+      let placed = false;
 
-      // 1. Fast, Direct Camera Setup
-      async function startCamera() {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' } },
-            audio: false
-          });
-          video.srcObject = stream;
-          await video.play();
-        } catch (err) {
-          console.error('Camera access error:', err);
+      // Uniform sizes: Sun is 0.42m, all planets are 0.28m, Moon is 0.12m
+      const BODIES = [
+        { name: 'Sun',     file: './assets/sun.glb',     size: 0.42, offset: -2.0, speed: 0.005 },
+        { name: 'Mercury', file: './assets/mercury.glb', size: 0.28, offset: -1.5, speed: 0.010 },
+        { name: 'Venus',   file: './assets/venus.glb',   size: 0.28, offset: -1.0, speed: 0.008 },
+        { name: 'Earth',   file: './assets/earth.glb',   size: 0.28, offset: -0.5, speed: 0.015 },
+        { name: 'Moon',    file: './assets/moon.glb',    size: 0.12, offset: -0.2, speed: 0.012 },
+        { name: 'Mars',    file: './assets/mars.glb',    size: 0.28, offset:  0.2, speed: 0.014 },
+        { name: 'Jupiter', file: './assets/jupiter.glb', size: 0.28, offset:  0.7, speed: 0.020 },
+        { name: 'Saturn',  file: './assets/saturn.glb',  size: 0.28, offset:  1.2, speed: 0.018 },
+        { name: 'Uranus',  file: './assets/uranus.glb',  size: 0.28, offset:  1.7, speed: 0.012 },
+        { name: 'Neptune', file: './assets/neptune.glb', size: 0.28, offset:  2.2, speed: 0.011 },
+        { name: 'Pluto',   file: './assets/pluto.glb',   size: 0.28, offset:  2.7, speed: 0.006 }
+      ];
+
+      const loadedPlanets = [];
+
+      init();
+      animate();
+
+      function init() {
+        scene = new THREE.Scene();
+
+        camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+        dirLight.position.set(2, 4, 2);
+        scene.add(dirLight);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // AR Session Launcher
+        const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+        document.getElementById('ar-button-container').appendChild(arButton);
+
+        // Reticle ring for surface aiming
+        reticle = new THREE.Mesh(
+          new THREE.RingGeometry(0.12, 0.15, 32).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({ color: 0x4caf50 })
+        );
+        reticle.matrixAutoUpdate = false;
+        reticle.visible = false;
+        scene.add(reticle);
+
+        // Screen tap listener
+        controller = renderer.xr.getController(0);
+        controller.addEventListener('select', onSelect);
+        scene.add(controller);
+
+        window.addEventListener('resize', onWindowResize);
+      }
+
+      function onSelect() {
+        if (reticle.visible && !placed) {
+          placed = true;
+          document.getElementById('instruction').textContent = 'Walk around to view the solar system';
+
+          solarSystemGroup = new THREE.Group();
+          solarSystemGroup.position.setFromMatrixPosition(reticle.matrix);
+          scene.add(solarSystemGroup);
+
+          reticle.visible = false;
+          loadPlanets();
         }
       }
 
-      // 2. Auto-Center and Auto-Scale Each .GLB Model to Its Relative Target Size
-      function initModelLoaders() {
-        const modelEls = document.querySelectorAll('.planet-model');
+      function loadPlanets() {
+        const loader = new THREE.GLTFLoader();
 
-        modelEls.forEach((el) => {
-          el.addEventListener('model-loaded', () => {
-            const threeGroup = el.getObject3D('mesh');
-            if (!threeGroup) return;
+        BODIES.forEach((body) => {
+          const planetPivot = new THREE.Group();
+          planetPivot.position.set(body.offset, 0.25, 0); // Placed at eye level above ground
+          solarSystemGroup.add(planetPivot);
 
-            // Clear internal keyframe tracks so they don't break positioning
-            if (threeGroup.animations) {
-              threeGroup.animations.length = 0;
-            }
+          loader.load(
+            body.file,
+            (gltf) => {
+              const model = gltf.scene;
 
-            threeGroup.position.set(0, 0, 0);
-            threeGroup.scale.set(1, 1, 1);
-            threeGroup.updateMatrixWorld(true);
+              // Clear embedded animations to eliminate unintended movement
+              if (model.animations) model.animations.length = 0;
 
-            // Compute exact geometric bounding box
-            const bbox = new THREE.Box3().setFromObject(threeGroup);
-            const center = new THREE.Vector3();
-            const size = new THREE.Vector3();
-            bbox.getCenter(center);
-            bbox.getSize(size);
+              // Center geometry to local (0, 0, 0)
+              const box = new THREE.Box3().setFromObject(model);
+              const center = new THREE.Vector3();
+              const size = new THREE.Vector3();
+              box.getCenter(center);
+              box.getSize(size);
 
-            // Shift inner vertices to dead-center (0, 0, 0)
-            threeGroup.traverse((child) => {
-              if (child.isMesh) {
-                child.geometry.computeBoundingBox();
-                child.position.sub(center);
+              model.position.sub(center);
+
+              // Normalize every planet to body.size
+              const maxDim = Math.max(size.x, size.y, size.z);
+              if (maxDim > 0) {
+                const scaleFactor = body.size / maxDim;
+                model.scale.set(scaleFactor, scaleFactor, scaleFactor);
               }
-            });
 
-            // Scale to target dimension defined in data-size attribute
-            const targetSize = parseFloat(el.getAttribute('data-size')) || 0.3;
-            const maxDim = Math.max(size.x, size.y, size.z);
-            if (maxDim > 0) {
-              const scaleFactor = targetSize / maxDim;
-              el.setAttribute('scale', `${scaleFactor} ${scaleFactor} ${scaleFactor}`);
-            }
-          });
+              planetPivot.add(model);
+              loadedPlanets.push({ mesh: model, speed: body.speed });
+            },
+            undefined,
+            (err) => console.warn(`Asset failed: ${body.file}`, err)
+          );
         });
       }
 
-      // 3. Smooth On-Axis Spin for Each Planet
-      function startRotationLoop() {
-        const spinners = document.querySelectorAll('.spinner');
-        let angle = 0;
-
-        function animate() {
-          angle += 0.4;
-          spinners.forEach((sp) => {
-            const speed = parseFloat(sp.getAttribute('data-speed')) || 1.0;
-            const currentY = (angle * speed) % 360;
-            sp.setAttribute('rotation', `0 ${currentY} 0`);
-          });
-          requestAnimationFrame(animate);
-        }
-        animate();
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
       }
 
-      window.addEventListener('DOMContentLoaded', () => {
-        startCamera();
-        initModelLoaders();
-        startRotationLoop();
-      });
+      function animate() {
+        renderer.setAnimationLoop(render);
+      }
+
+      function render(timestamp, frame) {
+        if (frame) {
+          const referenceSpace = renderer.xr.getReferenceSpace();
+          const session = renderer.xr.getSession();
+
+          if (!hitTestSourceRequested) {
+            session.requestReferenceSpace('viewer').then((viewerSpace) => {
+              session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+                hitTestSource = source;
+              });
+            });
+            session.addEventListener('end', () => {
+              hitTestSourceRequested = false;
+              hitTestSource = null;
+              placed = false;
+            });
+            hitTestSourceRequested = true;
+          }
+
+          if (hitTestSource && !placed) {
+            const hitTestResults = frame.getHitTestResults(hitTestSource);
+            if (hitTestResults.length > 0) {
+              const hit = hitTestResults[0];
+              reticle.visible = true;
+              reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+            } else {
+              reticle.visible = false;
+            }
+          }
+        }
+
+        // Smooth on-axis rotation without position shift
+        loadedPlanets.forEach((p) => {
+          p.mesh.rotation.y += p.speed;
+        });
+
+        renderer.render(scene, camera);
+      }
     </script>
   </body>
 </html>
