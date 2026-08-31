@@ -1,138 +1,174 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>WebXR AR Solar System</title>
+    <title>Universal WebAR Solar System</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     
-    <!-- Three.js + WebXR Modules -->
+    <!-- Three.js + GLTFLoader -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/webxr/ARButton.js"></script>
 
     <style>
-      body {
+      html, body {
         margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
         overflow: hidden;
         background-color: #000;
         font-family: Arial, sans-serif;
       }
-      #instruction {
+
+      /* Live Hardware Camera Feed */
+      #camFeed {
         position: fixed;
-        top: 20px;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+        z-index: 1;
+      }
+
+      /* WebGL 3D Canvas on top */
+      #webgl-canvas {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 2;
+        pointer-events: none;
+      }
+
+      #hud {
+        position: fixed;
+        bottom: 25px;
         left: 50%;
         transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.8);
+        background: rgba(0, 0, 0, 0.85);
         color: #fff;
         padding: 10px 22px;
         border-radius: 20px;
         font-size: 14px;
-        z-index: 1000;
+        z-index: 100;
         text-align: center;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.6);
         pointer-events: none;
       }
-      #ar-button-container {
+
+      #grant-btn {
+        display: none;
         position: fixed;
-        bottom: 30px;
+        top: 50%;
         left: 50%;
-        transform: translateX(-50%);
+        transform: translate(-50%, -50%);
+        background: #4CAF50;
+        color: white;
+        padding: 14px 24px;
+        border: none;
+        border-radius: 25px;
+        font-size: 16px;
+        font-weight: bold;
         z-index: 1000;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
       }
     </style>
   </head>
   <body>
 
-    <div id="instruction">Point camera at floor and tap screen to place planets</div>
-    <div id="ar-button-container"></div>
+    <!-- Camera Feed -->
+    <video id="camFeed" autoplay playsinline webkit-playsinline muted></video>
+
+    <!-- 3D Canvas -->
+    <canvas id="webgl-canvas"></canvas>
+
+    <div id="hud">Starting Camera...</div>
+    <button id="grant-btn">Enable Motion / Camera</button>
 
     <script>
-      let camera, scene, renderer;
-      let controller, reticle;
-      let hitTestSource = null;
-      let hitTestSourceRequested = false;
-      let solarSystemGroup = null;
-      let placed = false;
+      const hud = document.getElementById('hud');
+      const video = document.getElementById('camFeed');
+      const grantBtn = document.getElementById('grant-btn');
+      const canvas = document.getElementById('webgl-canvas');
 
-      // Uniform sizes: Sun is 0.42m, all planets are 0.28m, Moon is 0.12m
-      const BODIES = [
-        { name: 'Sun',     file: './assets/sun.glb',     size: 0.42, offset: -2.0, speed: 0.005 },
-        { name: 'Mercury', file: './assets/mercury.glb', size: 0.28, offset: -1.5, speed: 0.010 },
-        { name: 'Venus',   file: './assets/venus.glb',   size: 0.28, offset: -1.0, speed: 0.008 },
-        { name: 'Earth',   file: './assets/earth.glb',   size: 0.28, offset: -0.5, speed: 0.015 },
-        { name: 'Moon',    file: './assets/moon.glb',    size: 0.12, offset: -0.2, speed: 0.012 },
-        { name: 'Mars',    file: './assets/mars.glb',    size: 0.28, offset:  0.2, speed: 0.014 },
-        { name: 'Jupiter', file: './assets/jupiter.glb', size: 0.28, offset:  0.7, speed: 0.020 },
-        { name: 'Saturn',  file: './assets/saturn.glb',  size: 0.28, offset:  1.2, speed: 0.018 },
-        { name: 'Uranus',  file: './assets/uranus.glb',  size: 0.28, offset:  1.7, speed: 0.012 },
-        { name: 'Neptune', file: './assets/neptune.glb', size: 0.28, offset:  2.2, speed: 0.011 },
-        { name: 'Pluto',   file: './assets/pluto.glb',   size: 0.28, offset:  2.7, speed: 0.006 }
-      ];
-
+      let scene, camera, renderer;
+      let solarSystemGroup;
       const loadedPlanets = [];
 
-      init();
-      animate();
+      // Uniform sizes: Sun = 0.40m, all planets = 0.25m, Moon = 0.10m
+      const BODIES = [
+        { name: 'Sun',     file: './assets/sun.glb',     size: 0.40, offset: -2.0, speed: 0.003 },
+        { name: 'Mercury', file: './assets/mercury.glb', size: 0.25, offset: -1.5, speed: 0.008 },
+        { name: 'Venus',   file: './assets/venus.glb',   size: 0.25, offset: -1.0, speed: -0.005 },
+        { name: 'Earth',   file: './assets/earth.glb',   size: 0.25, offset: -0.5, speed: 0.010 },
+        { name: 'Moon',    file: './assets/moon.glb',    size: 0.10, offset: -0.2, speed: 0.008 },
+        { name: 'Mars',    file: './assets/mars.glb',    size: 0.25, offset:  0.2, speed: 0.009 },
+        { name: 'Jupiter', file: './assets/jupiter.glb', size: 0.25, offset:  0.7, speed: 0.015 },
+        { name: 'Saturn',  file: './assets/saturn.glb',  size: 0.25, offset:  1.2, speed: 0.012 },
+        { name: 'Uranus',  file: './assets/uranus.glb',  size: 0.25, offset:  1.7, speed: 0.009 },
+        { name: 'Neptune', file: './assets/neptune.glb', size: 0.25, offset:  2.2, speed: 0.008 },
+        { name: 'Pluto',   file: './assets/pluto.glb',   size: 0.25, offset:  2.7, speed: 0.004 }
+      ];
 
-      function init() {
-        scene = new THREE.Scene();
-
-        camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
-        scene.add(ambientLight);
-
-        const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
-        dirLight.position.set(2, 4, 2);
-        scene.add(dirLight);
-
-        // Renderer
-        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.xr.enabled = true;
-        document.body.appendChild(renderer.domElement);
-
-        // AR Session Launcher
-        const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
-        document.getElementById('ar-button-container').appendChild(arButton);
-
-        // Reticle ring for surface aiming
-        reticle = new THREE.Mesh(
-          new THREE.RingGeometry(0.12, 0.15, 32).rotateX(-Math.PI / 2),
-          new THREE.MeshBasicMaterial({ color: 0x4caf50 })
-        );
-        reticle.matrixAutoUpdate = false;
-        reticle.visible = false;
-        scene.add(reticle);
-
-        // Screen tap listener
-        controller = renderer.xr.getController(0);
-        controller.addEventListener('select', onSelect);
-        scene.add(controller);
-
-        window.addEventListener('resize', onWindowResize);
-      }
-
-      function onSelect() {
-        if (reticle.visible && !placed) {
-          placed = true;
-          document.getElementById('instruction').textContent = 'Walk around to view the solar system';
-
-          solarSystemGroup = new THREE.Group();
-          solarSystemGroup.position.setFromMatrixPosition(reticle.matrix);
-          scene.add(solarSystemGroup);
-
-          reticle.visible = false;
-          loadPlanets();
+      // 1. Direct Hardware Camera Startup
+      async function startCamera() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false
+          });
+          video.srcObject = stream;
+          await video.play();
+          hud.textContent = '🪐 Loading 3D Solar System...';
+          initThree();
+          setupOrientationTracking();
+        } catch (err) {
+          hud.textContent = 'Camera permission required';
+          grantBtn.style.display = 'block';
+          grantBtn.onclick = () => {
+            grantBtn.style.display = 'none';
+            startCamera();
+          };
         }
       }
 
-      function loadPlanets() {
+      // 2. Initialize Three.js Scene
+      function initThree() {
+        scene = new THREE.Scene();
+
+        camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 50);
+        camera.position.set(0, 0, 0);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+        dirLight.position.set(2, 4, 3);
+        scene.add(dirLight);
+
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        // Place system in front of user
+        solarSystemGroup = new THREE.Group();
+        solarSystemGroup.position.set(0, -0.1, -1.8);
+        scene.add(solarSystemGroup);
+
+        loadAllModels();
+        window.addEventListener('resize', onWindowResize);
+        animate();
+      }
+
+      // 3. Load & Normalize GLB Models to Identical Dimensions
+      function loadAllModels() {
         const loader = new THREE.GLTFLoader();
 
         BODIES.forEach((body) => {
           const planetPivot = new THREE.Group();
-          planetPivot.position.set(body.offset, 0.25, 0); // Placed at eye level above ground
+          planetPivot.position.set(body.offset, 0, 0);
           solarSystemGroup.add(planetPivot);
 
           loader.load(
@@ -140,19 +176,20 @@
             (gltf) => {
               const model = gltf.scene;
 
-              // Clear embedded animations to eliminate unintended movement
+              // Clear animation tracks to prevent position shifting
               if (model.animations) model.animations.length = 0;
 
-              // Center geometry to local (0, 0, 0)
+              // Compute bounding box
               const box = new THREE.Box3().setFromObject(model);
               const center = new THREE.Vector3();
               const size = new THREE.Vector3();
               box.getCenter(center);
               box.getSize(size);
 
+              // Center geometry to local (0, 0, 0)
               model.position.sub(center);
 
-              // Normalize every planet to body.size
+              // Scale to exact target dimension
               const maxDim = Math.max(size.x, size.y, size.z);
               if (maxDim > 0) {
                 const scaleFactor = body.size / maxDim;
@@ -161,11 +198,43 @@
 
               planetPivot.add(model);
               loadedPlanets.push({ mesh: model, speed: body.speed });
+
+              if (loadedPlanets.length === BODIES.length) {
+                hud.textContent = '🪐 Look around your room to view';
+              }
             },
             undefined,
-            (err) => console.warn(`Asset failed: ${body.file}`, err)
+            (err) => console.warn(`Could not load ${body.file}`, err)
           );
         });
+      }
+
+      // 4. Stable Gyroscopic Camera Tracking
+      function setupOrientationTracking() {
+        function handleOrientation(e) {
+          if (e.alpha === null) return;
+          const alpha = THREE.MathUtils.degToRad(e.alpha || 0);
+          const beta = THREE.MathUtils.degToRad(e.beta || 0);
+          const gamma = THREE.MathUtils.degToRad(e.gamma || 0);
+
+          const euler = new THREE.Euler(beta - Math.PI / 2, gamma, -alpha, 'YXZ');
+          camera.quaternion.setFromEuler(euler);
+        }
+
+        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+          grantBtn.style.display = 'block';
+          grantBtn.textContent = 'Enable Motion Sensor';
+          grantBtn.onclick = () => {
+            DeviceOrientationEvent.requestPermission().then(res => {
+              if (res === 'granted') {
+                window.addEventListener('deviceorientation', handleOrientation);
+                grantBtn.style.display = 'none';
+              }
+            });
+          };
+        } else {
+          window.addEventListener('deviceorientation', handleOrientation);
+        }
       }
 
       function onWindowResize() {
@@ -174,48 +243,18 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
       }
 
+      // 5. Render Loop (Only pure on-axis rotation, zero orbital revolution)
       function animate() {
-        renderer.setAnimationLoop(render);
-      }
+        requestAnimationFrame(animate);
 
-      function render(timestamp, frame) {
-        if (frame) {
-          const referenceSpace = renderer.xr.getReferenceSpace();
-          const session = renderer.xr.getSession();
-
-          if (!hitTestSourceRequested) {
-            session.requestReferenceSpace('viewer').then((viewerSpace) => {
-              session.requestHitTestSource({ space: viewerSpace }).then((source) => {
-                hitTestSource = source;
-              });
-            });
-            session.addEventListener('end', () => {
-              hitTestSourceRequested = false;
-              hitTestSource = null;
-              placed = false;
-            });
-            hitTestSourceRequested = true;
-          }
-
-          if (hitTestSource && !placed) {
-            const hitTestResults = frame.getHitTestResults(hitTestSource);
-            if (hitTestResults.length > 0) {
-              const hit = hitTestResults[0];
-              reticle.visible = true;
-              reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-            } else {
-              reticle.visible = false;
-            }
-          }
-        }
-
-        // Smooth on-axis rotation without position shift
         loadedPlanets.forEach((p) => {
           p.mesh.rotation.y += p.speed;
         });
 
         renderer.render(scene, camera);
       }
+
+      window.addEventListener('DOMContentLoaded', startCamera);
     </script>
   </body>
 </html>
