@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Text-Anchored AR</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-Anchored AR (Optimized)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     
     <!-- Core A-Frame -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <!-- OCR Engine -->
+    <!-- Lightweight OCR Engine -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <style>
@@ -21,7 +21,7 @@
       }
 
       #camFeed {
-        position: absolute;
+        position: fixed;
         top: 0;
         left: 0;
         width: 100vw;
@@ -68,7 +68,7 @@
   </head>
   <body>
 
-    <video id="camFeed" autoplay playsinline muted></video>
+    <video id="camFeed" autoplay playsinline webkit-playsinline muted></video>
 
     <div id="hud">
       Status: <span id="ocrStatus">Starting camera...</span><br>
@@ -80,14 +80,14 @@
     <a-scene 
       embedded 
       vr-mode-ui="enabled: false"
-      renderer="alpha: true; antialias: true; colorManagement: true;">
+      renderer="alpha: true; antialias: false; powerPreference: high-performance; precision: mediump;">
       
       <a-camera id="arCamera" position="0 0 0" look-controls="enabled: false" fov="80"></a-camera>
 
       <a-light type="ambient" color="#ffffff" intensity="1.5"></a-light>
       <a-light type="directional" color="#ffffff" intensity="2.0" position="2 4 3"></a-light>
 
-      <!-- Positioned directly at the 3D center of the detected text -->
+      <!-- Anchored stationary in 3D space -->
       <a-entity id="textTracker" position="0 0 -2" visible="false">
         <a-entity id="activeModel"></a-entity>
       </a-entity>
@@ -95,7 +95,6 @@
 
     <script>
       const MODEL_MAP = {
-        'SOLAR SYSTEM': './assets/solarsystem.glb',
         'SOLARSYSTEM':  './assets/solarsystem.glb',
         'SUN':          './assets/sun.glb',
         'MOON':         './assets/moon.glb',
@@ -110,62 +109,80 @@
         'PLUTO':        './assets/pluto.glb'
       };
 
+      // Exact whitelist characters for faster OCR processing
+      const WHITELIST = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
+
       const video = document.getElementById('camFeed');
       const statusEl = document.getElementById('ocrStatus');
       const detectedEl = document.getElementById('detected-word');
       const textTracker = document.getElementById('textTracker');
       const activeModel = document.getElementById('activeModel');
       const canvas = document.getElementById('ocrCanvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
       let currentActiveKey = null;
       let isProcessing = false;
       let ocrWorker = null;
       let lastSeenTime = 0;
       let target3DSize = 0.5;
-      const HIDE_TIMEOUT_MS = 1400;
+      const HIDE_TIMEOUT_MS = 1800;
 
+      // 1. Efficient camera start
       async function startCamera() {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+            video: { 
+              facingMode: { ideal: 'environment' }, 
+              width: { ideal: 960 }, 
+              height: { ideal: 540 } 
+            },
+            audio: false
           });
           video.srcObject = stream;
-          await video.play();
-          statusEl.textContent = 'Loading OCR Engine...';
-          initOCR();
+          video.onloadedmetadata = async () => {
+            await video.play();
+            statusEl.textContent = 'Initializing engine...';
+            initOCR();
+          };
         } catch (err) {
-          statusEl.textContent = 'Camera permission denied.';
+          statusEl.textContent = 'Camera permission required.';
           console.error(err);
         }
       }
 
+      // 2. High-speed OCR config with character whitelist & fast mode
       async function initOCR() {
         try {
-          ocrWorker = await Tesseract.createWorker('eng');
+          ocrWorker = await Tesseract.createWorker('eng', 1, {
+            workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+            corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd.wasm.js'
+          });
+
+          await ocrWorker.setParameters({
+            tessedit_char_whitelist: WHITELIST,
+            tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT
+          });
+
           statusEl.textContent = 'Ready — Point camera at text';
-          startTextScanLoop();
-          startVisibilityLoop();
+          startFastDetectionLoop();
+          startVisibilityWatchdog();
         } catch (err) {
           statusEl.textContent = 'OCR initialization failed.';
           console.error(err);
         }
       }
 
-      // Hard-centers geometry, clears all animation clips, and locks rotation to 0
+      // 3. One-time model normalization on load
       activeModel.addEventListener('model-loaded', () => {
         const threeGroup = activeModel.getObject3D('mesh');
         if (!threeGroup) return;
 
-        // Clear embedded translation/rotation animations from the GLB
-        if (threeGroup.animations) {
-          threeGroup.animations.length = 0;
-        }
+        // Clear embedded animation tracks
+        if (threeGroup.animations) threeGroup.animations.length = 0;
 
         threeGroup.position.set(0, 0, 0);
         threeGroup.rotation.set(0, 0, 0);
         threeGroup.scale.set(1, 1, 1);
-        threeGroup.updateMatrixWorld(true);
 
         const bbox = new THREE.Box3().setFromObject(threeGroup);
         const center = new THREE.Vector3();
@@ -180,34 +197,36 @@
           }
         });
 
-        const maxMeshDim = Math.max(size.x, size.y, size.z);
-        if (maxMeshDim > 0) {
-          const baseScale = target3DSize / maxMeshDim;
-          activeModel.setAttribute('scale', `${baseScale} ${baseScale} ${baseScale}`);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+          const s = target3DSize / maxDim;
+          activeModel.setAttribute('scale', `${s} ${s} ${s}`);
         }
       });
 
-      // Visibility watchdog loop (auto-hides when text leaves frame)
-      function startVisibilityLoop() {
-        function checkLoop() {
+      // 4. Auto-hide loop
+      function startVisibilityWatchdog() {
+        function check() {
           if (Date.now() - lastSeenTime > HIDE_TIMEOUT_MS && textTracker.getAttribute('visible')) {
             textTracker.setAttribute('visible', 'false');
             detectedEl.textContent = 'None';
             currentActiveKey = null;
           }
-          requestAnimationFrame(checkLoop);
+          requestAnimationFrame(check);
         }
-        checkLoop();
+        check();
       }
 
-      async function startTextScanLoop() {
+      // 5. Fast downsampled frame scanning
+      async function startFastDetectionLoop() {
         setInterval(async () => {
-          if (isProcessing || !ocrWorker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+          if (isProcessing || !ocrWorker || video.readyState < 2) return;
 
           isProcessing = true;
 
-          const scanW = 480;
-          const scanH = Math.round(video.videoHeight * (scanW / video.videoWidth));
+          // Downsample to 320px width for fast recognition without dropping accuracy
+          const scanW = 320;
+          const scanH = Math.round(video.videoHeight * (scanW / video.videoWidth)) || 240;
           canvas.width = scanW;
           canvas.height = scanH;
           ctx.drawImage(video, 0, 0, scanW, scanH);
@@ -221,8 +240,7 @@
                 const cleanedText = wordObj.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
                 for (const key of Object.keys(MODEL_MAP)) {
-                  const keyCleaned = key.replace(/\s+/g, '');
-                  if (cleanedText === keyCleaned || cleanedText.includes(keyCleaned)) {
+                  if (cleanedText === key || cleanedText.includes(key)) {
                     matchFound = true;
                     lastSeenTime = Date.now();
 
@@ -231,11 +249,10 @@
                     const textCenterY = (bbox.y0 + bbox.y1) / 2;
                     const textPixelWidth = Math.abs(bbox.x1 - bbox.x0);
 
-                    // Map 2D pixel coordinates to normalized device coordinates (-1 to 1)
+                    // Perspective transformation to Z = -2.0 plane
                     const ndcX = (textCenterX / scanW) * 2 - 1;
                     const ndcY = -((textCenterY / scanH) * 2 - 1);
 
-                    // Perspective projection at plane Z = -2.0 meters
                     const planeZ = -2.0;
                     const fovRad = (80 * Math.PI) / 180;
                     const planeHalfH = Math.tan(fovRad / 2) * Math.abs(planeZ);
@@ -244,7 +261,6 @@
                     const posX = ndcX * planeHalfW;
                     const posY = ndcY * planeHalfH;
 
-                    // Match model size directly to the text width
                     const text3DWidth = (textPixelWidth / scanW) * (planeHalfW * 2);
                     target3DSize = Math.max(text3DWidth, 0.25);
 
@@ -276,11 +292,11 @@
               }
             }
           } catch (err) {
-            console.error('OCR Error:', err);
+            console.error('Scan Error:', err);
           } finally {
             isProcessing = false;
           }
-        }, 750);
+        }, 500);
       }
 
       window.addEventListener('DOMContentLoaded', startCamera);
