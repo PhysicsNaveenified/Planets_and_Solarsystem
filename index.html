@@ -125,17 +125,18 @@
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { MindARThree } from 'mindar-image-three';
 
+    // IMPORTANT: Ensure targets in targets.mind are compiled in this EXACT array order!
     const CELESTIAL_BODIES = [
-      { name: "Sun",     mind: "sun.mind",     glb: "sun.glb",     planetScaleRatio: 0.80 },
-      { name: "Mercury", mind: "mercury.mind", glb: "mercury.glb", planetScaleRatio: 0.65 },
-      { name: "Venus",   mind: "venus.mind",   glb: "venus.glb",   planetScaleRatio: 0.70 },
-      { name: "Earth",   mind: "earth.mind",   glb: "earth.glb",   planetScaleRatio: 0.75 },
-      { name: "Moon",    mind: "moon.mind",    glb: "moon.glb",    planetScaleRatio: 0.55 },
-      { name: "Mars",    mind: "mars.mind",    glb: "mars.glb",    planetScaleRatio: 0.68 },
-      { name: "Jupiter", mind: "jupiter.mind", glb: "jupiter.glb", planetScaleRatio: 0.90 },
-      { name: "Saturn",  mind: "saturn.mind",  glb: "saturn.glb",  planetScaleRatio: 0.95 },
-      { name: "Uranus",  mind: "uranus.mind",  glb: "uranus.glb",  planetScaleRatio: 0.78 },
-      { name: "Neptune", mind: "neptune.mind", glb: "neptune.glb", planetScaleRatio: 0.78 }
+      { name: "Sun",     glb: "sun.glb",     planetScaleRatio: 0.80 },
+      { name: "Mercury", glb: "mercury.glb", planetScaleRatio: 0.65 },
+      { name: "Venus",   glb: "venus.glb",   planetScaleRatio: 0.70 },
+      { name: "Earth",   glb: "earth.glb",   planetScaleRatio: 0.75 },
+      { name: "Moon",    glb: "moon.glb",    planetScaleRatio: 0.55 },
+      { name: "Mars",    glb: "mars.glb",    planetScaleRatio: 0.68 },
+      { name: "Jupiter", glb: "jupiter.glb", planetScaleRatio: 0.90 },
+      { name: "Saturn",  glb: "saturn.glb",  planetScaleRatio: 0.95 },
+      { name: "Uranus",  glb: "uranus.glb",  planetScaleRatio: 0.78 },
+      { name: "Neptune", glb: "neptune.glb", planetScaleRatio: 0.78 }
     ];
 
     const startBtn = document.getElementById('start-btn');
@@ -161,14 +162,6 @@
     }
 
     async function startAR() {
-      // Check if running under secure HTTPS context
-      if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        alert("WebAR Requires HTTPS! Camera will not load on plain HTTP links.");
-        statusText.style.color = '#ff6b6b';
-        statusText.textContent = "Error: Must use HTTPS connection to access camera.";
-        return;
-      }
-
       startBtn.disabled = true;
       startBtn.style.opacity = '0.5';
       statusText.textContent = "Requesting permission & starting camera...";
@@ -176,16 +169,19 @@
       try {
         const mindarThree = new MindARThree({
           container: document.querySelector("#container"),
-          imageTargetSrc: CELESTIAL_BODIES.map(item => `./assets/${item.mind}`),
+          // FIXED: Single path to compiled master target file
+          imageTargetSrc: "./assets/targets.mind",
           maxTrack: 1,
           filterMinCF: 0.001,
           filterBeta: 0.01,
-          uiLoading: "no", // Disables internal MindAR loading screen that conflicts with custom UI
+          uiLoading: "no",
           uiScanning: "no"
         });
 
         const { renderer, scene, camera } = mindarThree;
 
+        // Perf tweak: Cap pixel ratio to 2x for smooth mobile rendering
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.1;
 
@@ -260,10 +256,8 @@
           };
         }
 
-        // Start MindAR within the user gesture event loop
         await mindarThree.start();
 
-        // Enforce iOS mobile video inline autoplay properties
         const videoElem = document.querySelector("#container video");
         if (videoElem) {
           videoElem.setAttribute("playsinline", "");
@@ -284,7 +278,7 @@
         startBtn.disabled = false;
         startBtn.style.opacity = '1';
         statusText.style.color = '#ff6b6b';
-        statusText.innerHTML = `<strong>Camera Error:</strong> ${err.message}<br><small>Make sure camera permission is granted in mobile settings.</small>`;
+        statusText.innerHTML = `<strong>Camera Error:</strong> ${err.message}<br><small>Make sure camera permission is granted in settings.</small>`;
       }
     }
 
