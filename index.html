@@ -207,6 +207,15 @@
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.1;
 
+        // Keep view matrix aspect ratio updated on device rotation / resize
+        window.addEventListener('resize', () => {
+          const w = window.innerWidth;
+          const h = window.innerHeight;
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        });
+
         const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
         scene.add(ambientLight);
 
@@ -259,11 +268,17 @@
                 modelContainer.add(rawModel);
 
                 const maxModelDim = Math.max(size.x, size.y, size.z) || 1.0;
-                const targetDimensions = anchor.group.scale;
-                const markerWidth = targetDimensions.x || 1.0;
-                const targetDiameter = markerWidth * item.planetScaleRatio;
+
+                // UNIFORM ASPECT RATIO FIX:
+                // Use Math.min to prevent rectangular card targets from stretching spheres into ovals
+                const scaleX = Math.abs(anchor.group.scale.x) || 1.0;
+                const scaleY = Math.abs(anchor.group.scale.y) || 1.0;
+                const minMarkerDim = Math.min(scaleX, scaleY);
+                
+                const targetDiameter = minMarkerDim * item.planetScaleRatio;
                 const computedScale = targetDiameter / maxModelDim;
 
+                // Enforce equal scalar scale on X, Y, and Z axes
                 modelContainer.scale.setScalar(computedScale);
                 modelContainer.position.set(0, 0, targetDiameter * 0.35);
                 shadowMesh.scale.set(targetDiameter * 1.1, targetDiameter * 1.1, 1);
