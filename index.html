@@ -128,7 +128,6 @@
     const labelCard = document.getElementById('label-card');
     const loadingScreen = document.getElementById('loading-screen');
     const loadingText = document.getElementById('loading-text');
-    const animatedModels = [];
 
     function createShadowTexture() {
       const canvas = document.createElement('canvas');
@@ -215,7 +214,7 @@
           bbox.getCenter(center);
 
           rawModel.position.sub(center);
-          rawModel.rotation.x = Math.PI / 2;
+          // Removed initial X-axis rotation here
           modelContainer.add(rawModel);
 
           const maxModelDim = Math.max(size.x, size.y, size.z) || 1.0;
@@ -236,8 +235,6 @@
             labelCard.style.display = 'block';
           };
 
-          animatedModels.push({ mesh: rawModel, speed: 0.006 });
-
         } catch (err) {
           console.warn(`Could not load GLB file: assets/${item.glb}`, err);
         }
@@ -253,12 +250,8 @@
       loadingScreen.style.opacity = '0';
       setTimeout(() => loadingScreen.remove(), 500);
 
+      // Cleaned animation loop (only renders the static scene)
       renderer.setAnimationLoop(() => {
-        animatedModels.forEach(m => {
-          if (m.mesh) {
-            m.mesh.rotation.y += m.speed;
-          }
-        });
         renderer.render(scene, camera);
       });
     }
